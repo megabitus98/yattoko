@@ -20,6 +20,10 @@
 - Unit tests make no network calls and do not connect to Telegram.
 - Every source file a task modifies for the first time gets one line under its existing header: `# Modified 2026 by megabitus98 (fork): <what changed>`. Existing `__author__` lines and the "By @BennyThink" banner stay.
 - Commits: the clone's local git identity is already set; plain commit messages; no `Co-Authored-By` or AI attribution lines. Commit only on the current working branch; never push (the controller pushes).
+- Handlers: `src/main.py` keeps plain handler functions (no decorators on a module-level client) and exposes `handler_table() -> list[HandlerSpec]`, where `HandlerSpec = tuple[type, Callable, Filter | None, int]` (handler class, callback, filters, group). `create_app() -> Client` builds the client and registers every entry with `app.add_handler(cls(callback, filters), group)`. Tests about which handlers exist inspect `handler_table()`, never `app.dispatcher.groups` (kurigram may fill that asynchronously; check the installed source in `.venv`).
+- Repo-level tests (README, NOTICE, `.github/`, git history) live in `tests/repo/` and run on a full checkout only (`uv run pytest -q tests/repo`); `.dockerignore` excludes `tests/repo`, so the image's `test` target runs everything else.
+- Docker safety: never run `docker system prune`, `docker image prune`, `docker builder prune` or any other prune; remove only this project's own images and containers, by name (`ytdlbot:*`, containers you started with `--name ytdlbot-*` or `--rm`).
+- Check kurigram and yt-dlp behaviour against the installed source in `.venv`, not from memory. No requests to real websites in tasks other than Task 15's single regression run.
 - Tests live in `tests/` at the repo root; `pyproject.toml` sets `[tool.pytest.ini_options] pythonpath = ["src"]`, `testpaths = ["tests"]`. `tests/conftest.py` sets safe env defaults (`APP_ID=1`, `APP_HASH=test`, `BOT_TOKEN=1:test`, `OWNER=1`, `AUTHORIZED_USER=1,2`, `DATA_DIR`/`TMPFILE_PATH`/`DB_DSN` under a temp dir) before any app module is imported.
 
 ## Review Focus
@@ -43,17 +47,19 @@
 
 **Interfaces:**
 - Produces: `selfcheck.run_selfcheck() -> dict[str, object]` with keys `yt_dlp`, `curl_cffi`, `kurigram` (version strings), `impersonation` (bool, from `YoutubeDL()._impersonate_target_available(ImpersonateTarget())`), `data_writable`, `tmp_writable` (bool), `ok` (bool, all checks true). `python main.py --self-check` prints that dict as JSON and exits 0 if `ok` else 1, without creating the Telegram client.
-- Produces: Dockerfile targets `runtime` (shipped) and `test` (runtime + dev group, `CMD ["python", "-m", "pytest", "-q", "/app/tests"]`).
+- Produces: Dockerfile targets `runtime` (shipped) and `test` (runtime + dev group + `tests/` without `tests/repo`, `CMD ["python", "-m", "pytest", "-q", "/app/tests"]`).
+- Produces: `main.handler_table()` and `main.create_app()` as described in Global Constraints; importing `main` creates no client.
 
 - [ ] **Step 1:** Rewrite `pyproject.toml` for uv (project table, `requires-python`, dependencies exactly as in Global Constraints plus `SQLAlchemy`, `fakeredis`, `redis`, `requests`, `filetype`, `beautifulsoup4`, `psutil`, `python-dotenv`, `ffmpeg-python`, `tqdm`; dev group; pytest options). Delete the PDM files listed above. Run `uv lock` and `uv sync`. Expected: lock resolves yt-dlp ≥ 2026.10.26 and kurigram 2.2.27.
 - [ ] **Step 2: Write the failing tests** in `tests/test_scaffold.py`:
   - `test_imports`: `import yt_dlp, pyrogram, curl_cffi` succeed and `pyrogram.__version__ == "2.2.27"`.
   - `test_selfcheck_reports_versions`: `run_selfcheck()` returns the keys above; `impersonation is True` (curl-cffi installed).
   - `test_selfcheck_flags_unwritable_dir(tmp_path, monkeypatch)`: with `DATA_DIR` pointing at a read-only directory, `data_writable is False` and `ok is False`.
+  - `test_import_main_creates_no_client`: `import main` succeeds and `main.handler_table()` returns a non-empty list without any network or client construction.
 - [ ] **Step 3:** Run `uv run pytest -q tests/test_scaffold.py`. Expected: FAIL (`selfcheck` missing).
 - [ ] **Step 4:** Implement `src/selfcheck.py` and the `--self-check` branch at the top of `src/main.py`'s `__main__` block (before the client is built; move client construction into a `create_app()` call made only when running the bot, so importing `main` in tests does not need network).
 - [ ] **Step 5:** Rewrite the upload fallback loop in `src/engine/base.py` for kurigram 2.2.27, where `save_file` raises on failure: try the send methods in order, catch exceptions per attempt, log them (redacted later in Task 5), stop on first success, raise one error if all fail. Remove the "try again with /direct" text.
-- [ ] **Step 6:** Rewrite `Dockerfile`: base `python:3.12-alpine3.24@sha256:<current digest>` (look it up with `docker buildx imagetools inspect python:3.12-alpine3.24`), `apk add ffmpeg deno aria2`, uv copied from `ghcr.io/astral-sh/uv:<pinned version>`, `ENV UV_PYTHON_DOWNLOADS=0`, `uv sync --locked --no-dev` into a venv on PATH, non-root user `app` (uid 10001), `WORKDIR /app`, `COPY src /app`, labels `org.opencontainers.image.source` plus `io.ytdlbot.yt-dlp`, `io.ytdlbot.curl-cffi`, `io.ytdlbot.kurigram` from build args filled from `uv.lock`. `test` target adds the dev group and copies `tests/`. Update `.dockerignore` and `.gitignore` as in spec 6.1.
+- [ ] **Step 6:** Rewrite `Dockerfile`: base `python:3.12-alpine3.24@sha256:<multi-arch index digest>` (the top-level "Digest" from `docker buildx imagetools inspect python:3.12-alpine3.24`, not a per-platform digest; local Docker is arm64, CI is amd64), `apk add ffmpeg deno aria2`, uv copied from `ghcr.io/astral-sh/uv:<pinned version>`, `ENV UV_PYTHON_DOWNLOADS=0`, `uv sync --locked --no-dev` into a venv on PATH, non-root user `app` (uid 10001), `WORKDIR /app`, `COPY src /app`, labels `org.opencontainers.image.source` plus `io.ytdlbot.yt-dlp`, `io.ytdlbot.curl-cffi`, `io.ytdlbot.kurigram` from build args filled from `uv.lock`. `test` target adds the dev group and copies `tests/`. Update `.dockerignore` and `.gitignore` as in spec 6.1.
 - [ ] **Step 7:** Run `uv run pytest -q` (PASS), then `docker build --target test -t ytdlbot:test . && docker run --rm ytdlbot:test` (PASS) and `docker build --target runtime -t ytdlbot:dev . && docker run --rm --read-only --tmpfs /tmp -e DATA_DIR=/tmp/data ytdlbot:dev python main.py --self-check` (exit 0, JSON with `"impersonation": true`).
 - [ ] **Step 8:** Commit: `build: move to uv, two-target image, kurigram 2.2.27, self-check`.
 
@@ -102,7 +108,7 @@
   - `test_no_sender_ignored`: `from_user=None` → `StopPropagation`, no reply.
   - `test_stranger_callback_alert`: callback from user 99 → `answer(..., show_alert=True)` called and `StopPropagation` raised.
   - `test_group_message_ignored_when_groups_off`: allowed user 2 in a group chat with `ENABLE_GROUPS=False` → `StopPropagation`, no reply.
-  - `test_every_handler_type_has_guard`: after importing `main` and calling `create_app()`'s handler registration, every handler class present in groups ≥ 0 (`MessageHandler`, `CallbackQueryHandler`, …) has a guard of the same class in group -1.
+  - `test_every_handler_type_has_guard`: for every handler class used in `handler_table()` at group ≥ 0 (`MessageHandler`, `CallbackQueryHandler`, …) there is an entry of the same class at group -1 whose callback is a guard.
   - `test_settings_saved_by_user_id`: a settings callback from user 2 in chat 555 stores the setting for user 2.
   - `test_callback_regex_anchored`: callback data `"x1080p"` matches no settings handler.
 - [ ] **Step 2: Write the failing tests** in `tests/test_links.py`:
@@ -181,9 +187,9 @@
 - Delete: `.github/FUNDING.yml`, `assets/USD.png`, `assets/CNY.png`, `assets/tron.png`, `assets/1.jpeg`, `assets/instagram.png`, `.github/workflows/upgrade.yml`, `.github/workflows/builder.yaml`, `.github/workflows/codeql-analysis.yml`, `.github/dependabot.yml` (replaced in Task 16)
 - Create: `NOTICE`
 - Modify/rewrite: `README.md`, `.env.example`, `docker-compose.yml` (one service, SQLite, volumes for `/data` and `/tmp`, no Redis/MySQL), `AGENTS.md`, `CLAUDE.md`
-- Test: `tests/test_repo.py`
+- Test: `tests/repo/test_repo.py` (repo-level group; runs with `uv run pytest -q tests/repo`)
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_repo.py`:
+- [ ] **Step 1: Write the failing tests** in `tests/repo/test_repo.py`:
   - `test_no_funding_or_payment_assets`: none of the deleted paths exist.
   - `test_notice_names_both_upstreams`: `NOTICE` contains `tgbot-collection/ytdlbot` and `Katze-942/ytdlbot`.
   - `test_readme_credit_first`: the first 15 lines of `README.md` contain both upstream links and "Not affiliated".
@@ -355,11 +361,11 @@
 - Test: `tests/test_restored.py`
 
 **Interfaces:**
-- With `ENABLE_VIP=False` (default): `/buy` and payment handlers are not registered, `check_quota`/`use_quota` are not called, and no scheduler is started. With `ENABLE_VIP=True`: upstream behaviour, quotas stored in SQLite.
+- With `ENABLE_VIP=False` (default): `/buy` and payment handlers are not in `handler_table()`, `check_quota`/`use_quota` are not called, and no scheduler is started. With `ENABLE_VIP=True`: upstream behaviour, quotas stored in SQLite.
 - `RCLONE_PATH` unset → no rclone call. `ENABLE_FFMPEG=False` → upstream's ffmpeg extras skipped (merging and thumbnails keep using ffmpeg).
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_restored.py`:
-  - `test_buy_not_registered_by_default`: no handler in the app matches `/buy`.
+  - `test_buy_not_registered_by_default`: no entry in `handler_table()` has the `buy` callback.
   - `test_no_quota_checks_by_default`: a download with `ENABLE_VIP=False` never calls `check_quota`.
   - `test_no_scheduler_by_default`: `create_app()` starts no `BackgroundScheduler`.
   - `test_vip_on_registers_buy(monkeypatch)`: with `ENABLE_VIP=True` the `/buy` handler exists and the scheduler has one `reset_free` job.
@@ -375,32 +381,32 @@
 ### Task 15: Regression suite
 
 **Files:**
-- Create: `tests/regression/run.py`, `tests/regression/links.json`, `tests/regression/README.md`
+- Create: `src/regression/__init__.py`, `src/regression/run.py`, `src/regression/links.json`, `src/regression/README.md` (under `src/` so the shipped `runtime` image contains it; stdlib and app modules only, no pytest)
 
 **Interfaces:**
-- `python tests/regression/run.py [--links tests/regression/links.json] [--upload]` runs inside the image (production security context), downloads each link through the bot's own download path (`attempt` + format options + size guard, no Telegram), probes the result with `ffprobe`, and prints one JSON line per link: `{"name", "status": "passed" | "downloader_broken" | "link_gone", "vcodec", "acodec", "duration", "size"}`. Exit code 0 when no link is `downloader_broken`, 2 when any is, 3 when all failures are `link_gone`. `--upload` sends the smallest result through `TEST_BOT_TOKEN`/`APP_ID`/`APP_HASH` to `TEST_CHAT_ID` with an `in_memory=True` client.
+- `python /app/regression/run.py [--links /app/regression/links.json] [--upload]` runs inside the `runtime` image (production security context), downloads each link through the bot's own download path (`attempt` + format options + size guard, no Telegram), probes the result with `ffprobe`, and prints one JSON line per link: `{"name", "status": "passed" | "downloader_broken" | "link_gone", "vcodec", "acodec", "duration", "size"}`. Exit code 0 when no link is `downloader_broken`, 2 when any is, 3 when all failures are `link_gone`. `--upload` sends the smallest result through `TEST_BOT_TOKEN`/`APP_ID`/`APP_HASH` to `TEST_CHAT_ID` with an `in_memory=True` client.
 - `links.json`: the four links from spec 6.13 with expectations (`vcodec: "h264"`, `audio: true` except Instagram `audio: null` until confirmed, `duration_min: 1` except Instagram).
 - Classification: `link_gone` when `classify()` returns `unavailable`; everything else that fails is `downloader_broken`.
 
 - [ ] **Step 1:** Write `tests/test_regression_runner.py` (unit, no network): `test_status_mapping` (fake attempt raising unavailable → `link_gone`; raising other → `downloader_broken`; a fake file with an h264 stream → `passed`) and `test_exit_codes`.
 - [ ] **Step 2:** Run it. Expected: FAIL.
-- [ ] **Step 3:** Implement `run.py`, `links.json` and the README (how Jenkins runs it: `docker run --read-only --user 10001:10001 --tmpfs /tmp:size=10g --cap-drop=ALL --security-opt no-new-privileges <image> python /app/tests/regression/run.py`).
-- [ ] **Step 4:** Run `uv run pytest -q` (PASS). Then one real run locally: `docker build --target test -t ytdlbot:test . && docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=4g --cap-drop=ALL --security-opt no-new-privileges ytdlbot:test python /app/tests/regression/run.py`. Expected: exit 0 (or 3 with a `link_gone` that needs a replacement link); record the Instagram audio result in `links.json`.
+- [ ] **Step 3:** Implement `run.py`, `links.json` and the README (how Jenkins runs it: `docker run --read-only --user 10001:10001 --tmpfs /tmp:size=10g --cap-drop=ALL --security-opt no-new-privileges <image> python /app/regression/run.py`).
+- [ ] **Step 4:** Run `uv run pytest -q` (PASS). Then one real run locally: `docker build --target runtime -t ytdlbot:dev . && docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=4g --cap-drop=ALL --security-opt no-new-privileges ytdlbot:dev python /app/regression/run.py`. Expected: exit 0 (or 3 with a `link_gone` that needs a replacement link); record the Instagram audio result in `links.json`.
 - [ ] **Step 5:** Commit: `test: real-download regression suite`.
 
 ### Task 16: GitHub workflows, Dependabot, deployment example
 
 **Files:**
 - Create: `.github/workflows/ci.yml`, `.github/workflows/merge-and-promote.yml`, `.github/dependabot.yml`, `deploy/kubernetes.example.yaml`, `deploy/README.md`
-- Test: `tests/test_pipeline_files.py`
+- Test: `tests/repo/test_pipeline_files.py`
 
 **Interfaces:**
-- `ci.yml`: on `pull_request` from branches of this repository (`if: github.event.pull_request.head.repo.full_name == github.repository`), checks out `github.event.pull_request.head.sha` with `persist-credentials: false`, builds the `test` target and runs it (job name `unit`, posts the check), builds `runtime` for linux/amd64 and pushes `ghcr.io/${{ github.repository }}:sha-<head sha>`; `permissions: {contents: read, packages: write}`; no `statuses: write`; no `pull_request_target`; every `uses:` pinned to a full commit SHA with the tag in a comment.
+- `ci.yml`: on `pull_request` from branches of this repository (`if: github.event.pull_request.head.repo.full_name == github.repository`), checks out `github.event.pull_request.head.sha` with `persist-credentials: false` and `fetch-depth: 0`, runs `uv run pytest -q tests/repo` on the checkout, builds the `test` target and runs it (job name `unit`, posts the check), builds `runtime` for linux/amd64 and pushes `ghcr.io/${{ github.repository }}:sha-<head sha>`; `permissions: {contents: read, packages: write}`; no `statuses: write`; no `pull_request_target`; every `uses:` pinned to a full commit SHA with the tag in a comment.
 - `merge-and-promote.yml`: `schedule: "*/15 * * * *"` and `workflow_dispatch`; implements spec 6.14 merge and promote steps with `gh` and `docker buildx imagetools create`; tags `stable` and `YYYY.MM.DD-<short sha>`; on any mismatch it promotes nothing and fails the run.
 - `dependabot.yml`: `uv` daily, group `python-deps` (all except `yt-dlp`), `cooldown: {default-days: 3, exclude: ["yt-dlp"]}`; `docker` weekly with `ignore` for `python` `version-update:semver-minor` and `semver-major`; `github-actions` weekly, grouped.
 - `deploy/kubernetes.example.yaml`: Deployment (1 replica, `Recreate`, uid 10001, `fsGroup: 10001`, read-only root, `automountServiceAccountToken: false`, `imagePullPolicy: Always`, Keel annotations, `imagePullSecrets`, exec probes `python /app/health.py`, env from Secret), PVC (block storage, 1Gi), `emptyDir` at `/tmp` with `sizeLimit: 10Gi`, cookies Secret mount, egress NetworkPolicy (DNS + `0.0.0.0/0` except private/CGNAT/link-local/loopback/multicast + placeholder proxy `ipBlock`). Placeholders only.
 
-- [ ] **Step 1:** Write `tests/test_pipeline_files.py`: `test_actions_pinned_by_sha` (every `uses:` value matches `@[0-9a-f]{40}`), `test_no_pull_request_target`, `test_ci_checks_out_head_sha`, `test_dependabot_yt_dlp_alone` (yt-dlp excluded from the group and from cooldown), `test_docker_python_minor_ignored`, `test_example_has_no_real_addresses` (no RFC1918 address other than inside `except:` lists, no `t.me`).
+- [ ] **Step 1:** Write `tests/repo/test_pipeline_files.py`: `test_actions_pinned_by_sha` (every `uses:` value matches `@[0-9a-f]{40}`), `test_no_pull_request_target`, `test_ci_checks_out_head_sha`, `test_dependabot_yt_dlp_alone` (yt-dlp excluded from the group and from cooldown), `test_docker_python_minor_ignored`, `test_example_has_no_real_addresses` (no RFC1918 address other than inside `except:` lists, no `t.me`).
 - [ ] **Step 2:** Run. Expected: FAIL.
 - [ ] **Step 3:** Write the files (look up each action's current release SHA with `gh api repos/<owner>/<action>/commits/<tag> --jq .sha`).
 - [ ] **Step 4:** Run `uv run pytest -q`. Expected: PASS. Validate YAML with `uv run python -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yml .github/dependabot.yml deploy/kubernetes.example.yaml` (add `pyyaml` to the dev group).
