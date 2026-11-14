@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -252,10 +252,9 @@ def direct_download(client: Client, message: types.Message):
     bot_msg = message.reply_text("Запрос принят, обрабатываю...")
     try:
         direct_entrance(client, bot_msg, url)
-    except ValueError as e:
-        message.reply_text(e.__str__())
+    except Exception:
+        reply_error(message, url)
         bot_msg.delete()
-        return
 
 
 def spdl_handler(client: Client, message: types.Message):
@@ -274,10 +273,9 @@ def spdl_handler(client: Client, message: types.Message):
     bot_msg = message.reply_text("Запрос принят, обрабатываю....")
     try:
         special_download_entrance(client, bot_msg, url)
-    except ValueError as e:
-        message.reply_text(e.__str__())
+    except Exception:
+        reply_error(message, url)
         bot_msg.delete()
-        return
 
 
 def ytdl_handler(client: Client, message: types.Message):
@@ -299,10 +297,15 @@ def ytdl_handler(client: Client, message: types.Message):
     bot_msg = message.reply_text("Group download request received.")
     try:
         youtube_entrance(client, bot_msg, url)
-    except ValueError as e:
-        message.reply_text(e.__str__())
+    except Exception:
+        reply_error(message, url)
         bot_msg.delete()
-        return
+
+
+def reply_error(message: types.Message, url: str | None) -> None:
+    # call from an except block: the traceback goes to the (redacted) log, never to the user
+    logging.exception("Download failed for %s", url)
+    message.reply_text(BotText.error)
 
 
 def check_link(url: str):
@@ -350,19 +353,15 @@ def download_handler(client: Client, message: types.Message):
         youtube_entrance(client, bot_msg, url)
     except pyrogram.errors.Flood as e:
         f = BytesIO()
-        f.write(str(e).encode())
         f.write(b"Your job will be done soon. Just wait!")
         f.name = "Please wait.txt"
-        message.reply_document(f, caption=f"Пожалуйста, подожди {e} секунд...")
+        message.reply_document(f, caption=f"Пожалуйста, подожди {e.value} секунд...")
         f.close()
         for owner_id in OWNERS:
-            client.send_message(owner_id, f"Пожалуйста, подожди {e} секунд...")
+            client.send_message(owner_id, f"Пожалуйста, подожди {e.value} секунд...")
         time.sleep(e.value)
-    except ValueError as e:
-        message.reply_text(e.__str__())
-    except Exception as e:
-        logging.error("Download failed", exc_info=True)
-        message.reply_text(f"❌ Произошла ошибка!: {e}")
+    except Exception:
+        reply_error(message, url)
 
 
 # Callback data -> stored setting value. The handler regexes are built from these keys and anchored,

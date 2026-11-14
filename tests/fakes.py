@@ -24,7 +24,8 @@ def fake_message(text, user_id=2, chat_type=enums.ChatType.PRIVATE, chat_id=None
         chat=SimpleNamespace(
             id=user_id if chat_id is None else chat_id, type=chat_type
         ),
-        reply_text=lambda reply, **kwargs: replies.append(reply),
+        # returns the sent message, on which every method (delete, edit_text) is a no-op
+        reply_text=lambda reply, **kwargs: replies.append(reply) or FakeClient(),
         stop_propagation=stop_propagation,
     )
     return message, replies

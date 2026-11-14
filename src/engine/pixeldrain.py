@@ -2,13 +2,16 @@
 # coding: utf-8
 
 # ytdlbot - pixeldrain.py
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
 
 __author__ = "SanujaNS <sanujas@sanuja.biz>"
 
+import logging
 import tempfile
 import pathlib
 import re
 from urllib.parse import urlparse
+from config import BotText
 from engine.direct import DirectDownload
 
 
@@ -37,12 +40,8 @@ def pixeldrain_download(client, bot_message, url):
             ddl = DirectDownload(client, bot_message, download_url)
             ddl.start()
 
-        except ValueError as e:
-            bot_message.edit_text(f"❌ Произошла ошибка!\n\n`{e}`")
-        except Exception as e:
-            bot_message.edit_text(
-                f"❌ Произошла ошибка!\n\n{str(e)}\n\n"
-                "Проверьте URL и попробуйте ещё раз."
-            )
+        except Exception:
+            logging.exception("Pixeldrain download failed for %s", url)
+            bot_message.edit_text(BotText.error)
 
     _download(url)

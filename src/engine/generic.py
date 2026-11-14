@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger
 
 import logging
 import os
@@ -77,7 +78,8 @@ class YoutubeDownload(BaseDownloader):
     def _download(self, formats) -> list:
         output = Path(self._tempdir.name, "%(title).70s.%(ext)s").as_posix()
         ydl_opts = {
-            "verbose": True,
+            # without a logger yt-dlp writes errors straight to stderr, past the redacting formatter
+            "logger": logging.getLogger("yt_dlp"),
             "progress_hooks": [lambda d: self.download_hook(d)],
             "outtmpl": output,
             "restrictfilenames": False,
@@ -152,7 +154,6 @@ class YoutubeDownload(BaseDownloader):
                 }
 
         files = None
-        logging.info("yt-dlp options: %s", ydl_opts)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([self._url])
         files = list(Path(self._tempdir.name).glob("*"))

@@ -2,13 +2,16 @@
 # coding: utf-8
 
 # ytdlbot - instagram.py
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
 
+import logging
 import time
 import pathlib
 import re
 
 import filetype
 import requests
+from config import BotText
 from engine.base import BaseDownloader
 
 
@@ -45,8 +48,9 @@ class InstagramDownload(BaseDownloader):
     def _download(self, formats=None):
         try:
             resp = requests.get(f"http://instagram:15000/?url={self._url}").json()
-        except Exception as e:
-            self._bot_msg.edit_text(f"❌ Произошла ошибка!\n\n`{e}`")
+        except Exception:
+            logging.exception("Instagram service request failed for %s", self._url)
+            self._bot_msg.edit_text(BotText.error)
             return []
 
         code = self.extract_code()
@@ -127,8 +131,9 @@ class InstagramDownload(BaseDownloader):
                     video_paths.append(str(save_path))
                     counter += 1
 
-                except Exception as e:
-                    self._bot_msg.edit_text(f"❌ Произошла ошибка!\n\n`{e}`")
+                except Exception:
+                    logging.exception("Instagram media download failed for %s", self._url)
+                    self._bot_msg.edit_text(BotText.error)
                     return []
 
         if "video" in found_media_types:

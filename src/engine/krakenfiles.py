@@ -2,11 +2,15 @@
 # coding: utf-8
 
 # ytdlbot - krakenfiles.py
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
 
 __author__ = "SanujaNS <sanujas@sanuja.biz>"
 
+import logging
+
 import requests
 from bs4 import BeautifulSoup
+from config import BotText
 from engine.direct import DirectDownload
 
 
@@ -45,10 +49,9 @@ def krakenfiles_download(client, bot_message, url: str):
                 if "url" in json_data:
                     return json_data["url"]
 
-            except requests.RequestException as e:
-                bot_message.edit_text(f"Error during form submission: {str(e)}")
-            except ValueError as e:
-                bot_message.edit_text(f"Error parsing response: {str(e)}")
+            except (requests.RequestException, ValueError):
+                logging.exception("Krakenfiles form submission failed")
+                bot_message.edit_text(BotText.error)
 
         raise ValueError("Could not obtain download URL")
 
@@ -62,12 +65,8 @@ def krakenfiles_download(client, bot_message, url: str):
             downloader = DirectDownload(client, bot_message, download_url)
             downloader.start()
 
-        except ValueError as e:
-            bot_message.edit_text(f"❌ Произошла ошибка!\n\n{str(e)}")
-        except Exception as e:
-            bot_message.edit_text(
-                f"❌ Произошла ошибка!\n\n{str(e)}\n\n"
-                "Проверьте валидность URL и попробуйте ещё раз."
-            )
+        except Exception:
+            logging.exception("Krakenfiles download failed for %s", url)
+            bot_message.edit_text(BotText.error)
 
     _download(url)

@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - direct.py
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
 
 import logging
 import re
@@ -12,7 +13,7 @@ from uuid import uuid4
 import filetype
 import requests
 
-from config import ENABLE_ARIA2
+from config import ENABLE_ARIA2, BotText
 from engine.base import BaseDownloader
 
 
@@ -101,8 +102,9 @@ class DirectDownload(BaseDownloader):
             logging.error(error_msg)
             self._bot_msg.edit_text(f"❌ Произошла ошибка!\n\n{error_msg}")
             return []
-        except Exception as e:
-            self._bot_msg.edit_text(f"❌ Произошла ошибка!\n\n`{e}`")
+        except Exception:
+            logging.exception("Aria2 download failed for %s", self._url)
+            self._bot_msg.edit_text(BotText.error)
             return []
         finally:
             if self._process:
