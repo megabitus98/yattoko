@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27)
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -39,12 +39,17 @@ from pyrogram.filters import Filter
 from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 
 from config import (
+    ALLOWED_USERS,
     APP_HASH,
     APP_ID,
-    AUTHORIZED_USER,
     BOT_TOKEN,
+    ENABLE_DIRECT,
+    ENABLE_GROUPS,
+    ENABLE_SEARCH,
+    ENABLE_SPDL,
+    ENABLE_STATS,
     M3U8_SUPPORT,
-    OWNER,
+    OWNERS,
     TMPFILE_PATH,
     WORKERS,
     BotText,
@@ -63,8 +68,6 @@ from utils import extract_url_and_name, sizeof_fmt, timeof_fmt
 localize_filetype=dict(document="Файл", video="Видео", audio="Аудио")
 localize_vcodec={"vcodec-auto": "АВТО", "vcodec-vp9": "VP9 (рекомендовано)", "vcodec-av01": "AV1 (самый сжатый, но требовательный)" ,"vcodec-avc1": "AVC1 (H.264)"}
 localize_sponsorblock = {"disabled": "Не вырезать рекламу", "remove": "Вырезать рекламу"}
-
-logging.info("Authorized users are %s", AUTHORIZED_USER)
 
 
 def search_ytb(kw: str, num_results: int = 10) -> str:
@@ -100,13 +103,8 @@ def private_use(func):
             logging.debug("%s, it's annoying me...🙄️ ", message.text)
             return
 
-        # authorized users check
-        if AUTHORIZED_USER:
-            users = [int(i) for i in AUTHORIZED_USER.split(",")]
-        else:
-            users = []
-
-        if users and chat_id and chat_id not in users:
+        # allowed users check (owners included); an empty list allows nobody
+        if chat_id not in ALLOWED_USERS:
             message.reply_text(BotText.private)
             return
 
@@ -165,6 +163,9 @@ def ping_handler(client: Client, message: types.Message):
 
 
 def stats_handler(client: Client, message: types.Message):
+    if not ENABLE_STATS or getattr(message.from_user, "id", None) not in OWNERS:
+        message.reply_text(BotText.disabled)
+        return
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
@@ -254,6 +255,9 @@ def settings_handler(client: Client, message: types.Message):
 
 
 def direct_download(client: Client, message: types.Message):
+    if not ENABLE_DIRECT:
+        message.reply_text(BotText.disabled)
+        return
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
@@ -273,6 +277,9 @@ def direct_download(client: Client, message: types.Message):
 
 
 def spdl_handler(client: Client, message: types.Message):
+    if not ENABLE_SPDL:
+        message.reply_text(BotText.disabled)
+        return
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
@@ -292,7 +299,9 @@ def spdl_handler(client: Client, message: types.Message):
 
 
 def ytdl_handler(client: Client, message: types.Message):
-    # for group only
+    # for group only; with groups off it stays silent
+    if not ENABLE_GROUPS:
+        return
     init_user(message.from_user.id)
     client.send_chat_action(message.chat.id, enums.ChatAction.TYPING)
     message_text = message.text
@@ -300,6 +309,9 @@ def ytdl_handler(client: Client, message: types.Message):
     logging.info("ytdl start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
         message.reply_text("Check your URL.")
+        return
+    if m3u8_blocked(url):
+        message.reply_text(BotText.disabled)
         return
 
     bot_msg = message.reply_text("Group download request received.")
@@ -312,26 +324,30 @@ def ytdl_handler(client: Client, message: types.Message):
 
 
 def check_link(url: str):
-    ytdl = yt_dlp.YoutubeDL()
     if re.findall(r"^https://www\.youtube\.com/channel/", url) or "list" in url:
         # TODO maybe using ytdl.extract_info
         raise ValueError("📛 Загрузка плейлистов отключена!")
 
-    if not M3U8_SUPPORT and (re.findall(r"m3u8|\.m3u8|\.m3u$", url.lower())):
-        return "m3u8 links are disabled."
+
+def m3u8_blocked(url: str) -> bool:
+    return not M3U8_SUPPORT and bool(re.search(r"m3u8|\.m3u$", url.lower()))
 
 
 @private_use
 def download_handler(client: Client, message: types.Message):
     chat_id = message.from_user.id
+    url = message.text
+    is_link = bool(re.findall(r"^https?://", url.lower()))
+    if (not is_link and not ENABLE_SEARCH) or (is_link and m3u8_blocked(url)):
+        message.reply_text(BotText.disabled)
+        return
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    url = message.text
     logging.info("start %s", url)
 
     try:
         # No URL -> treat the text as a YouTube search query
-        if not re.findall(r"^https?://", url.lower()):
+        if not is_link:
             reply = message.reply_text("🔎 Ищу ролики на YouTube...")
             text = search_ytb(url)
             client.edit_message_text(
@@ -356,7 +372,8 @@ def download_handler(client: Client, message: types.Message):
         f.name = "Please wait.txt"
         message.reply_document(f, caption=f"Пожалуйста, подожди {e} секунд...")
         f.close()
-        client.send_message(OWNER, f"Пожалуйста, подожди {e} секунд...")
+        for owner_id in OWNERS:
+            client.send_message(owner_id, f"Пожалуйста, подожди {e} секунд...")
         time.sleep(e.value)
     except ValueError as e:
         message.reply_text(e.__str__())

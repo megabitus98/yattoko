@@ -4,6 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -15,6 +16,8 @@ from pyrogram import Client, types
 class BotText:
 
     start = """✨ Добро пожаловать в бота для загрузки музыки и видео! Пропишите /help чтобы узнать подробнее."""
+
+    disabled = "This feature is turned off."
 
     private = """⛔ Извините, у вас нет доступа к этому боту."""
 

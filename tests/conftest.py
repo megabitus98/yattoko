@@ -20,6 +20,20 @@ os.environ.update(
         "DATA_DIR": os.path.join(_test_root, "data"),
         "TMPFILE_PATH": os.path.join(_test_root, "tmp"),
         "DB_DSN": "sqlite:///" + os.path.join(_test_root, "data", "ytdlbot.db"),
+        # Blank means "use the code default" and keeps a local .env from switching features on.
+        **dict.fromkeys(
+            [
+                "ENABLE_SEARCH",
+                "ENABLE_DIRECT",
+                "ENABLE_ARIA2",
+                "ENABLE_SPDL",
+                "ENABLE_STATS",
+                "ENABLE_GROUPS",
+                "M3U8_SUPPORT",
+                "TG_NORMAL_MAX_SIZE",
+            ],
+            "",
+        ),
     }
 )
 os.makedirs(os.environ["DATA_DIR"], exist_ok=True)
