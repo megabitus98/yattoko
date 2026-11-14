@@ -102,6 +102,7 @@ yt-dlp and dependencies:
 | 12 | Nothing published until the owner says so | [Owner] |
 | 13 | Features Katze deleted are restored from upstream (`tgbot-collection/ytdlbot` master) and switched off | [Owner] |
 | 14 | Commits are made under the owner's GitHub account (its noreply email address) | [Owner] |
+| 15 | Until "publish", the code lives in a private GitHub repository under the owner's account and the images in a private registry package | [Owner] |
 
 ## 6. Design
 
@@ -116,7 +117,7 @@ yt-dlp and dependencies:
 - **[Design]** `.gitignore` adds `*.session`, `*.session-journal`, `*.sqlite*`, `*.db`, `*cookies*.txt`, `cookies/`, `.env.*` with `!.env.example`, `.pdm-python`. `.dockerignore` adds `**/.env*`, `**/*.session*`, `**/*.sqlite*`, `**/*.db`, `**/*cookies*`, `.git`, `docs`.
 - **[Design]** Every `actions/checkout` uses `persist-credentials: false`; actions are pinned by full commit SHA.
 - **[Owner]** Commits use the owner's GitHub account: its profile name and its `users.noreply.github.com` address, set as the local git identity of this clone before the first commit.
-- Until the owner says "publish": push URLs of the `katze` and `upstream` remotes stay disabled and nothing is pushed (see Q3 for where the code lives before then).
+- **[Owner]** Until the owner says "publish", the only push remote is a **private** repository under the owner's GitHub account; the push URLs of the `katze` and `upstream` remotes stay disabled. **[Design]** It is a standalone repository created with `gh repo create --private` and the full history pushed into it, not a GitHub fork (a fork of a public repository cannot be private). Credit therefore lives in README and NOTICE, not in GitHub's "forked from" label.
 
 ### 6.2 Access control
 
@@ -263,29 +264,33 @@ Dead env vars documented today: `TG_NORMAL_MAX_SIZE` is wired up (6.8); `CAPTION
 
 ### 6.14 Update and release pipeline
 
-This is the target shape after the owner says "publish". Before that, see slices 1-4 in section 7 and Q3.
+This pipeline runs in the private repository from slice 4 on and stays the same after publishing (decision 15). Two GitHub features it could lean on, branch protection/rulesets and auto-merge, are not available on private repositories of a GitHub Free account (docs.github.com, "Who can use this feature?" on each page; the account's plan was not checked). So the design does not depend on them: the `merge-and-promote` workflow below is the gate on every plan, and branch protection is added on top once available (after publishing, or with GitHub Pro).
 
 - **[Owner]** Each new stable release of a dependency becomes a PR; tests gate it; green PRs ship.
 - **[Design]** Dependabot:
   - `uv` ecosystem, daily. yt-dlp is its own PR with no cooldown (site fixes are urgent); every other uv package is grouped into one PR with the default cooldown. This keeps lock conflicts and real-download reruns down and stops a stuck PR from blocking yt-dlp.
   - `docker` ecosystem with `ignore` for Python minor and major updates (they would break `requires-python`). Alpine minor bumps (which change deno and ffmpeg) are a manual, owner-reviewed PR; the weekly job reports when a newer `3.12-alpineX` tag exists.
   - `github-actions` ecosystem, grouped, keeping actions pinned by SHA.
-  - Auto-merge only for `uv` PRs. `docker` and `github-actions` PRs wait for an owner click.
-  - Dependabot and scheduled workflows are switched on by hand in the repo settings.
+  - Automatic merging only for `uv` PRs. `docker` and `github-actions` PRs wait for an owner click.
+  - Dependabot version updates are switched on in the repo settings (a standalone private repository has Actions on by default).
 - **[Design]** GitHub Actions on every PR from a branch of this repository (never from forks): check out the PR **head** commit, build the image, run the unit tests in the `test` target, push the `runtime` image to the registry as `sha-<head sha>`. Nothing is built on push to `main`. Workflows declare minimal `permissions`; no workflow has `statuses: write`; no `pull_request_target`.
 - **[Design]** Home Jenkins runs the regression tests:
   - it learns about PRs by **polling** GitHub for branches in our own repository only; it never builds PRs from forks;
   - its pipeline definition lives in Jenkins, not in the repo, in a folder whose only credentials are the test bot token, its API ID/hash and the status token;
   - it posts a `regression` commit status as `pending`, waits up to 60 minutes for `sha-<head sha>` to exist (a missing image is pending, not failure), runs the suite, then posts success or failure with a fixed description ("passed", "downloader broken", "link gone") and no `target_url`. Details go to the owner by the test bot;
-  - the status token is a fine-grained token limited to commit statuses on this one repository, with an expiry date and a reminder.
-- **[Design]** Branch protection on `main`: required checks `unit` and `regression`, **branches must be up to date before merging**, squash merge only. A PR behind `main` is rebased and re-tested.
-- **[Design]** Promotion: a `promote` workflow runs every 15 minutes and on demand (it does not rely on the merge event, which a `GITHUB_TOKEN`-driven auto-merge does not raise). It takes the newest `main` commit, finds the PR head that was tested, checks that the trees are identical (`git rev-parse <sha>^{tree}`), and copies that exact digest to `stable` and `YYYY.MM.DD-<short sha>` with `docker buildx imagetools create` (no rebuild). If the trees differ, it promotes nothing and tells the owner. No other workflow can write `stable`.
-- **[Design]** Deploy: Keel in the cluster polls `stable` (`keel.sh/policy: force`, `keel.sh/match-tag: "true"`, `keel.sh/trigger: poll`) and the container uses `imagePullPolicy: Always`, so a moved tag really pulls the new digest.
+  - its token is one fine-grained token limited to this one repository: contents read (the repository is private) and commit statuses write, with an expiry date and a reminder.
+- **[Design]** A `merge-and-promote` workflow runs every 15 minutes and on demand. It does not rely on merge events (a merge made with `GITHUB_TOKEN` starts no workflows) or on plan-dependent GitHub features:
+  - **Merge:** for each open Dependabot `uv` PR whose head commit has `unit` and `regression` both green and whose base is the current `main` head, squash-merge it. A PR behind `main` gets `@dependabot rebase` and is re-tested. One PR per run.
+  - **Promote:** take the newest `main` commit, find the PR head that was tested, check that both statuses are green on it and that the trees are identical (`git rev-parse <sha>^{tree}`), and copy that exact digest to `stable` and `YYYY.MM.DD-<short sha>` with `docker buildx imagetools create` (no rebuild). If anything does not match, promote nothing and tell the owner. This holds for owner-merged PRs too, so a hand merge of an untested tree never ships.
+  - No other workflow can write `stable`.
+- **[Design]** Once available (public repository, or GitHub Pro), branch protection on `main` adds required checks `unit` and `regression`, up-to-date branches and squash-only merges, as a guard against manual mistakes.
+- **[Design]** Deploy: Keel in the cluster polls `stable` (`keel.sh/policy: force`, `keel.sh/match-tag: "true"`, `keel.sh/trigger: poll`) and the container uses `imagePullPolicy: Always`, so a moved tag really pulls the new digest. While the package is private, the Deployment has an `imagePullSecret` (Keel uses the same one to poll) and Jenkins logs in to pull; the registry only accepts classic tokens, so this is a classic token with `read:packages` only, dropped when the package goes public.
+- **[Design]** GitHub Actions minutes on a private repository are limited per month; one amd64 build plus unit tests per PR stays well within them at this update rate, but the weekly job reports the month's usage.
 - **[Design]** A weekly Jenkins job runs the regression suite against the image the cluster is running (it reads the running pod's image digest), plus a drift check from the image labels: if the running yt-dlp or curl-cffi is more than 3 days behind PyPI's latest stable, or a Dependabot PR has been open more than 3 days, the owner is told. The job and the bot's heartbeat both ping the owner's existing uptime monitor as a dead-man's switch.
 
 ### 6.15 Kubernetes shape (generic)
 
-- Deployment, 1 replica, `Recreate`, non-root, `fsGroup` set, read-only root filesystem, `automountServiceAccountToken: false`, `imagePullPolicy: Always`, Keel annotations from 6.14.
+- Deployment, 1 replica, `Recreate`, non-root, `fsGroup` set, read-only root filesystem, `automountServiceAccountToken: false`, `imagePullPolicy: Always`, Keel annotations from 6.14, and an `imagePullSecret` while the package is private.
 - Volumes: a small block-storage persistent volume at `/data` (SQLite + session); an `emptyDir` at `/tmp` with `sizeLimit` (6.8); a Secret at `COOKIES_DIR` (read-only).
 - Env from a Secret: `BOT_TOKEN`, `APP_ID`, `APP_HASH`, `OWNER`, `AUTHORIZED_USER`, `PROXY_EXITS`, `PROXY_PIN`, `OWN_PUBLIC_IPS`. Plain env: `TMPFILE_PATH`, `HOME`, `XDG_CACHE_HOME`, `DENO_DIR`, `DB_DSN`, feature switches.
 - Probes from 6.8. Resources: request equals limit, sized from a measured peak (yt-dlp + ffmpeg merge of a large video), not guessed; `ephemeral-storage` limit covers the `/tmp` emptyDir.
@@ -294,13 +299,13 @@ This is the target shape after the owner says "publish". Before that, see slices
 
 ## 7. Build order
 
-Each slice ends in something that runs. Slices 1-4 happen before publishing (where the code and images live meanwhile is Q3).
+Each slice ends in something that runs. Slices 1-4 happen in the private repository (decision 15).
 
-1. **Hygiene, safety, state (first shippable slice)**: repo clean-up and credit (6.1), access guard (6.2), feature switches (6.3), logging/secrets (6.10), English texts (6.11), uv + pinned image + kurigram 2.2.27 (6.12), the H.264-first format sort and new codec default (6.4), and the state part of 6.8 (`/data` volume, `workdir="/data"`, absolute `DB_DSN`, `/tmp` emptyDir and env). Unit tests for the guard, switches, config, redaction and the no-Cyrillic check. Ends with a manual check in the real container, non-root and read-only: one YouTube, Short and TikTok link each arrives as a video that plays inline in Telegram for an allow-listed user, and a stranger gets the ID reply. (Instagram may still fail here; it is fixed in slice 2.)
+1. **Hygiene, safety, state (first shippable slice)**: create the private repository and push the history; repo clean-up and credit (6.1), access guard (6.2), feature switches (6.3), logging/secrets (6.10), English texts (6.11), uv + pinned image + kurigram 2.2.27 (6.12), the H.264-first format sort and new codec default (6.4), and the state part of 6.8 (`/data` volume, `workdir="/data"`, absolute `DB_DSN`, `/tmp` emptyDir and env). Unit tests for the guard, switches, config, redaction and the no-Cyrillic check. Ends with a manual check in the real container, non-root and read-only: one YouTube, Short and TikTok link each arrives as a video that plays inline in Telegram for an allow-listed user, and a stranger gets the ID reply. (Instagram may still fail here; it is fixed in slice 2.)
 2. **Downloads that work everywhere**: playlist refusal and the Google Drive case (6.4), per-site cookies and Instagram via yt-dlp (6.5), error classifier and user replies (6.6 without owner notices), the rest of 6.8 (job executor, size guards, cache fixes, heartbeat), host check (6.9 code part), the matching unit tests.
 3. **Owner notices, proxy, restored features**: owner notices including the impersonation check (6.6, 6.4), proxy fallback and pin (6.7), the upstream features restored behind their switches (6.3), their unit tests.
-4. **Regression and deployment at home**: regression suite (6.13), a Jenkins job running it against a locally built image, the weekly job and drift check, Kubernetes manifests with probes, NetworkPolicy and router rule (private repo), manual deploy by digest.
-5. **Go public** (only when the owner says so): review `docs/` and the commit history for private details; create the GitHub repo, enable Actions, Dependabot, branch protection and auto-merge, the promote workflow; push images and make the registry package public (the image holds no secrets, so the cluster and Jenkins need no pull credentials); switch the Deployment to `stable` with Keel.
+4. **Pipeline and deployment, still private**: regression suite (6.13); the GitHub Actions build and unit-test workflow, Dependabot, and `merge-and-promote` (6.14) in the private repository with a private package; the Jenkins regression job and the weekly job with drift check; Kubernetes manifests with probes, NetworkPolicy, pull secret and Keel, plus the router rule (owner's private deployment repository). Ends with a Dependabot yt-dlp PR going all the way to the cluster without a human step.
+5. **Go public** (only when the owner says so): review `docs/` and the whole commit history for private details; switch the repository to public; make the registry package public and remove the pull secret and the classic read token; add branch protection on `main`.
 
 ## 8. Left to the builder
 
@@ -318,7 +323,7 @@ Q1. Answered: restore from upstream and switch off (decision 13, 6.3).
 
 Q2. Answered: the owner's GitHub account (decision 14, 6.1).
 
-Q3. Until you say "publish", where do the code and images live? Either a private GitHub repository and private registry package (the real pipeline gets built and tested early; flipping to public later publishes the whole history), or only this machine and the home network (slices 1-4 use local builds and manual deploys; the GitHub pipeline is first exercised in slice 5).
+Q3. Answered: a private GitHub repository and private registry package until publishing (decision 15, 6.1, 6.14).
 
 ## 10. Private deployment note (outside this repository)
 
@@ -338,9 +343,10 @@ These change something agreed in the conversation, because research showed the a
 Other calls:
 - No re-encoding; non-H.264 sources are sent as they are (6.4).
 - Cookies come from spare accounts, never personal ones; regression runs Instagram without cookies unless a separate test account exists (6.5, 6.13).
-- Auto-merge only for Python dependency PRs; base-image and GitHub-action PRs wait for your click (6.14).
+- Automatic merging only for Python dependency PRs; base-image and GitHub-action PRs wait for your click (6.14).
 - Every other Python package is grouped into one daily PR; yt-dlp stays its own PR with no waiting period (6.14).
-- Promotion runs on a 15-minute schedule and only ships an image whose tested tree equals `main` (6.14).
+- Merging and promotion run in one 15-minute scheduled workflow that works on any GitHub plan, and only ship an image whose tested tree equals `main` (6.14). Branch protection is added later as an extra guard.
+- The private repository is a standalone repository, not a GitHub fork, because a fork of a public repository cannot be private (6.1).
 - The router blocks the cluster from reaching the home's own public IP (6.9).
 - No existing bot instance or data to migrate; the bot starts with a fresh database.
 - The owner-side infrastructure facts from v1 moved to the private note.
