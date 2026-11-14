@@ -89,10 +89,12 @@ def test_original_audio_track_by_default(send_as):
 @pytest.mark.parametrize("send_as", ["video", "audio"])
 def test_audio_lang_filter(send_as):
     options = build_format_options("1080p", "auto", send_as, "en")
-    assert "[language=en]" in options["format"]
-    assert "/bestaudio" in options["format"].split("[language=en]", 1)[1]
+    assert "[language^=en]" in options["format"]
+    assert "/bestaudio" in options["format"].split("[language^=en]", 1)[1]
     formats = [video("v", "avc1.640028"), audio("de", "de"), audio("en", "en")]
     assert select(options, formats).endswith("en")
+    # region-tagged tracks count: en-US is English
+    assert select(options, [*formats[:2], audio("en-US", "en-US")]).endswith("en-US")
     # no English track: any audio instead of failing
     assert select(options, formats[:2]).endswith("de")
 

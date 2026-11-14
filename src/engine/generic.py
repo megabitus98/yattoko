@@ -2,13 +2,15 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS)
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID
 
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yt_dlp
+from yt_dlp.utils import sanitize_url
 
 from config import (
     AUDIO_FORMAT,
@@ -17,9 +19,11 @@ from config import (
     YT_DLP_PROXY,
 )
 
-from database.model import get_format_settings, get_sponsorblock_settings
+from database.model import get_sponsorblock_settings
 from engine.base import BaseDownloader
 from engine.cookies import cookie_options
+from engine.errors import RefusedContent
+from engine.proxy import ydl_proxy
 from engine.sites import site_for_url
 
 # codec setting -> (filter on the first format rungs, codec the sort prefers)
@@ -36,7 +40,8 @@ def build_format_options(quality: str, vcodec: str, send_as: str, audio_lang: st
     # H.264 first because Telegram plays it inline everywhere; the codec sorts before the resolution,
     # so with "auto" YouTube above 1080p (no H.264 there) arrives in 1080p. Nothing is re-encoded.
     codec_filter, preferred = CODECS.get(vcodec.removeprefix("vcodec-"), CODECS["auto"])
-    lang = f"[language={audio_lang}]" if audio_lang else ""
+    # ^= so "en" also matches region-tagged tracks such as "en-US"
+    lang = f"[language^={audio_lang}]" if audio_lang else ""
 
     def audio(extra: str = "") -> str:
         # without a preferred language yt-dlp ranks the original track first
@@ -67,26 +72,60 @@ def build_format_options(quality: str, vcodec: str, send_as: str, audio_lang: st
     }
 
 
-def match_filter(info_dict):
-    if info_dict.get("is_live"):
-        raise NotImplementedError("Skipping live video")
-    return None  # Allow download for non-live videos
+def _is_live(info: dict) -> bool:
+    # a raw extractor result may carry only live_status; yt-dlp fills in is_live while processing
+    return bool(info.get("is_live")) or info.get("live_status") == "is_live"
+
+
+def single_video_only(info: dict, incomplete: bool = False) -> None:
+    # Backstop for what the check in attempt() cannot see (a url_transparent hop): yt-dlp calls the
+    # match_filter for every video before its download, playlist entries carry playlist_index.
+    if info.get("playlist_index") is not None or _is_live(info):
+        raise RefusedContent()
+    return None
+
+
+def attempt(url: str, site: str, exit: str, opts: dict, tmpdir: Path) -> dict:
+    # One YoutubeDL per attempt: extraction and download through the same exit (YouTube media URLs
+    # are tied to the extracting IP), and a fresh in-memory cookies copy for this instance only.
+    params = opts | {
+        "proxy": ydl_proxy(exit),
+        "noplaylist": True,  # watch?v=x&list=y means the video, not the playlist
+        "match_filter": single_video_only,
+        "outtmpl": (tmpdir / "%(title).70s.%(ext)s").as_posix(),
+    }
+    with yt_dlp.YoutubeDL(params | cookie_options(Path(COOKIES_DIR), site)) as ydl:
+        # process=False: the raw result, so a channel's entries are never walked
+        info = ydl.extract_info(url, download=False, process=False)
+        # short links and redirects come back as a pointer; follow it (still nothing downloaded)
+        for _ in range(5):
+            if not info or info.get("_type") != "url":
+                break
+            info = ydl.extract_info(
+                sanitize_url(info["url"], scheme="https"), download=False, ie_key=info.get("ie_key"), process=False
+            )
+        if not info:
+            raise yt_dlp.utils.DownloadError("Nothing extracted")
+        if info.get("_type") in ("playlist", "multi_video") or _is_live(info):
+            raise RefusedContent()
+        return ydl.process_ie_result(info, download=True)
 
 
 class YoutubeDownload(BaseDownloader):
     def _setup_formats(self) -> dict:
-        return build_format_options(self._quality, self._vcodec, self._format, PREFERRED_AUDIO_LANG)
+        options = build_format_options(self._quality, self._vcodec, self._format, PREFERRED_AUDIO_LANG)
+        if urlparse(self._url).hostname == "drive.google.com":
+            # Google Drive offers the uploaded file itself as format "source"
+            options["format"] = f"source/{options['format']}"
+        return options
 
     def _download(self, formats) -> list:
-        output = Path(self._tempdir.name, "%(title).70s.%(ext)s").as_posix()
         ydl_opts = {
             # without a logger yt-dlp writes errors straight to stderr, past the redacting formatter
             "logger": logging.getLogger("yt_dlp"),
             "progress_hooks": [lambda d: self.download_hook(d)],
-            "outtmpl": output,
             "restrictfilenames": False,
             "quiet": True,
-            "match_filter": match_filter,
             "writethumbnail": True,
             **formats,  # format, format_sort, merge_output_format
             "source_address": "0.0.0.0",
@@ -95,11 +134,9 @@ class YoutubeDownload(BaseDownloader):
             "retries": 6,
             "fragment_retries": 6,
             "skip_unavailable_fragments": True,
-            "proxy": YT_DLP_PROXY,
-            "playlist_items": 1,  # workaround so a channel link does not download the whole channel
         }
 
-        if get_format_settings(self._chat_id) == "audio":
+        if self._format == "audio":
             ydl_opts["postprocessors"] = [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -122,7 +159,7 @@ class YoutubeDownload(BaseDownloader):
                 'key': 'EmbedThumbnail'
             }]
 
-        if get_sponsorblock_settings(self._chat_id) == "remove":
+        if get_sponsorblock_settings(self._from_user) == "remove":
             sponsorblock_pps = [
                 {
                     'key': 'SponsorBlock',
@@ -146,12 +183,8 @@ class YoutubeDownload(BaseDownloader):
                 }
             }
 
-        files = None
-        # the site's cookies file, if there is one, as a fresh in-memory copy for this YoutubeDL only
-        with yt_dlp.YoutubeDL(ydl_opts | cookie_options(Path(COOKIES_DIR), site)) as ydl:
-            ydl.download([self._url])
-        files = list(Path(self._tempdir.name).glob("*"))
-        return files
+        attempt(self._url, site, YT_DLP_PROXY or "direct", ydl_opts, Path(self._tempdir.name))
+        return list(Path(self._tempdir.name).glob("*"))
 
     def _start(self):
         # start download and upload, no cache hit

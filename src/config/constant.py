@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -31,6 +31,8 @@ class BotText:
     blocked = "{site} is blocking downloads right now. The owner has been told. Try again later."
 
     unavailable = "This video is private, deleted or not available here."
+
+    refused = "Send a link to a single video, not a playlist, channel or live stream."
 
     bad_link = "Check the link and send it again."
 

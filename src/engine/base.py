@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams
 
 import hashlib
 import json
@@ -31,7 +31,7 @@ from database.model import (
     get_quality_settings,
     get_vcodec_settings,
 )
-from engine.errors import classify, site_name, user_message
+from engine.errors import RefusedContent, classify, site_name, user_message
 from utils import debounce, sizeof_fmt
 
 
@@ -66,9 +66,10 @@ class BaseDownloader(ABC):
         self._tempdir = tempfile.TemporaryDirectory(prefix="ytdl-", dir=TMPFILE_PATH)
         self._bot_msg: Types.Message = bot_msg
         self._redis = Redis()
-        self._quality = get_quality_settings(self._chat_id)
-        self._vcodec = get_vcodec_settings(self._chat_id)
-        self._format = get_format_settings(self._chat_id)
+        # settings are saved per user (main.save_setting); in a group the chat ID is the group's
+        self._quality = get_quality_settings(self._from_user)
+        self._vcodec = get_vcodec_settings(self._from_user)
+        self._format = get_format_settings(self._from_user)
 
     def __del__(self):
         self._tempdir.cleanup()
@@ -316,6 +317,9 @@ class BaseDownloader(ABC):
                 self._start()
         except errors.Flood:
             raise  # the handler tells the user to wait
+        except RefusedContent:
+            logging.info("Refused %s: not a single video", self._url)
+            self._bot_msg.edit_text(BotText.refused)
         except Exception as e:
             # one reply: the progress message becomes the error text; the traceback only goes to the log
             logging.exception("Download failed for %s", self._url)

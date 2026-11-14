@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - errors.py
-# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other
+# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other, RefusedContent for playlists and live streams
 
 import re
 from typing import Literal
@@ -14,6 +14,11 @@ from yt_dlp.utils import GeoRestrictedError
 from config import BotText
 
 Kind = Literal["login_required", "blocked", "unavailable", "other"]
+
+
+class RefusedContent(Exception):
+    """A playlist, channel or live stream: refused before anything is downloaded (reply BotText.refused)."""
+
 
 # Checked in this order: YouTube's rate-limit text starts with "Video unavailable",
 # and its private-video text also says "sign in". tests/test_errors.py pins the strings.
