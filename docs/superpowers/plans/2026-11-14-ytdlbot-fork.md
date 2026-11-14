@@ -417,3 +417,11 @@
 - Create the private repository `megabitus98/ytdlbot`, disable Actions, push `main` (controller, after slice 1). Enable Actions after Task 16.
 - Create the bot in BotFather (disable groups), get `APP_ID`/`APP_HASH` from my.telegram.org, create the test bot and test chat; each owner sends `/start` to both bots.
 - Jenkins regression job and credentials (owner's explicit go for each credential), Kubernetes Secret/PVC/NetworkPolicy/router rule and Keel in the owner's private deployment repository (see the private deployment note).
+
+## Carry-over from reviews (each item belongs to the task named; that task's implementer must do it and its reviewer must check it)
+
+- **Task 4:** In the Dockerfile `runtime` stage add `ENV HOME=/tmp/home XDG_CACHE_HOME=/tmp/cache DENO_DIR=/tmp/cache/deno TMPFILE_PATH=/tmp/ytdlbot` (spec 6.8; with a read-only root the yt-dlp cache under the default HOME is unwritable). Add `pytest.mark.skipif(os.geteuid() == 0, ...)` to `test_selfcheck_flags_unwritable_dir`. Drop the floating `# syntax=docker/dockerfile:1` line (or pin it by digest).
+- **Task 5:** Every download entry point (`/direct`, `/spdl`, group `/ytdl`, the plain-text handler, and `youtube_entrance`/`direct_entrance` callers) catches `Exception` and replies `BotText.error`; since Task 1 the upload loop raises `RuntimeError`, which today escapes `/direct`, `/spdl` and `/ytdl`. Extend `test_no_exception_text_to_users` to cover those handlers.
+- **Task 7:** `test_modified_files_carry_notice` must use `git diff --name-only --diff-filter=d 0d5bfcd -- src` (deleted files have no notice to carry). Rephrase any `ponytail:` comment prefixes in the repo as plain comments (the repo goes public).
+- **Task 9:** `.dockerignore`: use spec 6.1's `**/*cookies*` with exceptions `!src/engine/cookies.py` and `!tests/test_cookies.py` instead of the narrower patterns from Task 1.
+- **Task 16:** `ci.yml` passes `--build-arg YT_DLP_VERSION`, `CURL_CFFI_VERSION`, `KURIGRAM_VERSION` extracted from `uv.lock` (see the Dockerfile comment); `tests/repo/test_pipeline_files.py` checks that it does.
