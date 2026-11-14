@@ -16,3 +16,6 @@ tests/repo
 # spec 6.1 says **/*cookies*, narrowed so src/engine/cookies.py and tests/test_cookies.py stay in the image
 **/*cookies*.txt
 **/cookies/
+
+**/*.db-*
+**/*.sqlite-*

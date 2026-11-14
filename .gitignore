@@ -190,3 +190,10 @@ cookies/
 .env.*
 !.env.example
 .pdm-python
+
+# SQLite WAL/journal side files
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
