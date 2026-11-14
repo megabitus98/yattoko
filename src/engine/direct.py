@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - direct.py
-# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text, English texts from config.constant
 
 import logging
 import re
@@ -42,7 +42,7 @@ class DirectDownload(BaseDownloader):
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
         self._process = None
         try:
-            self._bot_msg.edit_text("Aria2 download starting...")
+            self._bot_msg.edit_text(BotText.aria2_start)
             temp_dir = self._tempdir.name
             command = [
                 "aria2c",
@@ -98,9 +98,8 @@ class DirectDownload(BaseDownloader):
             return files
 
         except subprocess.TimeoutExpired:
-            error_msg = "Время ожидания загрузки превысило 5 минут..."
-            logging.error(error_msg)
-            self._bot_msg.edit_text(f"❌ Произошла ошибка!\n\n{error_msg}")
+            logging.error("Aria2 download timed out after 5 minutes for %s", self._url)
+            self._bot_msg.edit_text(BotText.error)
             return []
         except Exception:
             logging.exception("Aria2 download failed for %s", self._url)

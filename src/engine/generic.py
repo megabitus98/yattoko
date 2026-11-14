@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts
 
 import logging
 import os
@@ -12,68 +12,68 @@ import yt_dlp
 
 from config import (
     AUDIO_FORMAT,
+    PREFERRED_AUDIO_LANG,
     YT_DLP_PROXY,
 )
 
 from utils import is_youtube
-from database.model import get_format_settings, get_quality_settings, get_sponsorblock_settings, get_vcodec_settings
+from database.model import get_format_settings, get_sponsorblock_settings
 from engine.base import BaseDownloader
+
+# codec setting -> (filter on the first format rungs, codec the sort prefers)
+CODECS = {
+    "auto": ("", "h264"),
+    "avc1": ("[vcodec^=avc1]", "h264"),
+    "vp9": ("[vcodec^=vp]", "vp9"),
+    "av01": ("[vcodec^=av01]", "av01"),
+}
+
+
+def build_format_options(quality: str, vcodec: str, send_as: str, audio_lang: str) -> dict:
+    # vcodec is the stored setting ("vcodec-auto") or the bare name ("auto").
+    # H.264 first because Telegram plays it inline everywhere; the codec sorts before the resolution,
+    # so with "auto" YouTube above 1080p (no H.264 there) arrives in 1080p. Nothing is re-encoded.
+    codec_filter, preferred = CODECS.get(vcodec.removeprefix("vcodec-"), CODECS["auto"])
+    lang = f"[language={audio_lang}]" if audio_lang else ""
+
+    def audio(extra: str = "") -> str:
+        # without a preferred language yt-dlp ranks the original track first
+        return f"(bestaudio{lang}{extra}/bestaudio{extra})" if lang else f"bestaudio{extra}"
+
+    if send_as == "audio":
+        formats = [audio(f"[ext={AUDIO_FORMAT}]"), audio("[ext=m4a]"), audio(), "best"]
+    else:
+        height = f"[height<={quality[:-1]}]"
+        formats = [
+            # most videos up to about two hours
+            f"bestvideo{height}{codec_filter}[filesize<1.5G]+{audio('[filesize<0.5G]')}",
+            f"bestvideo{height}[filesize<1.5G]+{audio('[filesize<0.5G]')}",
+            # very long videos
+            f"bestvideo{height}{codec_filter}[filesize<1G]+{audio('[filesize<1G]')}",
+            f"bestvideo{height}[filesize<1G]+{audio('[filesize<1G]')}",
+            # sizes not known in advance
+            f"(bestvideo{height}/bestvideo)+{audio()}",
+            # only video or only audio
+            f"(bestvideo{height}/bestvideo)/{audio()}",
+            "best",
+        ]
+    return {
+        # with "auto" the first rungs repeat; dict.fromkeys drops the copies and keeps the order
+        "format": "/".join(dict.fromkeys(formats)),
+        "format_sort": [f"vcodec:{preferred}", "res", "acodec:m4a"],
+        "merge_output_format": "mp4",
+    }
 
 
 def match_filter(info_dict):
     if info_dict.get("is_live"):
-        raise NotImplementedError("⏏️ Я не могу загружать трансляции. Пожалуйста, дождитесь окончания стрима")
+        raise NotImplementedError("Skipping live video")
     return None  # Allow download for non-live videos
 
 
 class YoutubeDownload(BaseDownloader):
-    @staticmethod
-    def get_format(height, vcodec):
-        return [
-            # Видео, которые по длине не больше двух часов в основном
-            f"bestvideo{height}{vcodec}[filesize<1.5G]+(bestaudio[language=ru][filesize<0.5G]/bestaudio[filesize<0.5G])",
-            f"bestvideo{height}[filesize<1.5G]+(bestaudio[language=ru][filesize<0.5G]/bestaudio[filesize<0.5G])",
-            # Очень длинные видео
-            f"bestvideo{height}{vcodec}[filesize<1G]+(bestaudio[language=ru][filesize<1G]/bestaudio[filesize<1G])",
-            f"bestvideo{height}[filesize<1G]+(bestaudio[language=ru][filesize<1G]/bestaudio[filesize<1G])",
-            # Видео, у которых нет чётких размеров
-            f"(bestvideo{height}/bestvideo)+(bestaudio[language=ru]/bestaudio)",
-            # Просто видео или просто аудио
-            f"(bestvideo{height}/bestvideo)/(bestaudio[language=ru]/bestaudio)",
-            "best",
-        ]
-
-    def _setup_formats(self) -> list | None:
-        # if not is_youtube(self._url):
-        #     return [None]
-
-        quality, format_, vcodec = (
-            get_quality_settings(self._chat_id),
-            get_format_settings(self._chat_id),
-            get_vcodec_settings(self._chat_id),
-        )
-
-        vcodec_maps = {
-            "vcodec-auto": "",
-            "vcodec-vp9": "[vcodec^=vp]",
-            "vcodec-avc1": "[vcodec^=avc1]",
-            "vcodec-av01": "[vcodec^=av01]",
-        }
-
-        quality_format=f"[height<={quality[:-1]}]"
-        vcodec_format=vcodec_maps.get(vcodec)
-
-        formats = []
-
-        audio = AUDIO_FORMAT or "m4a"
-        audioformats = [f"bestaudio[ext={audio}][language=ru]/bestaudio[ext={audio}]", "bestaudio[ext=m4a][language=ru]/bestaudio[ext=m4a]", "bestaudio[language=ru]/bestaudio", "best"]
-
-        if format_ == "audio":
-            formats.extend(audioformats)
-        else:
-            formats.extend(self.get_format(quality_format, vcodec_format))
-
-        return formats
+    def _setup_formats(self) -> dict:
+        return build_format_options(self._quality, self._vcodec, self._format, PREFERRED_AUDIO_LANG)
 
     def _download(self, formats) -> list:
         output = Path(self._tempdir.name, "%(title).70s.%(ext)s").as_posix()
@@ -86,7 +86,7 @@ class YoutubeDownload(BaseDownloader):
             "quiet": True,
             "match_filter": match_filter,
             "writethumbnail": True,
-            "format": "/".join(formats),
+            **formats,  # format, format_sort, merge_output_format
             "source_address": "0.0.0.0",
             "concurrent_fragments": 16,
             "buffersize": 4194304,
@@ -94,7 +94,7 @@ class YoutubeDownload(BaseDownloader):
             "fragment_retries": 6,
             "skip_unavailable_fragments": True,
             "proxy": YT_DLP_PROXY,
-            "playlist_items": 1,  # Костыль, чтобы пользователи не могли загружать видео с каналов
+            "playlist_items": 1,  # workaround so a channel link does not download the whole channel
         }
 
         if get_format_settings(self._chat_id) == "audio":
@@ -112,9 +112,6 @@ class YoutubeDownload(BaseDownloader):
                 'already_have_thumbnail': False
             }]
         else:
-            if get_format_settings(self._chat_id) == "video":
-                ydl_opts["merge_output_format"] = "mp4"
-
             ydl_opts["postprocessors"] = [{
                 'key': 'FFmpegMetadata',
                 'add_metadata': True

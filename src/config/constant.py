@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -15,7 +15,7 @@ from pyrogram import Client, types
 
 class BotText:
 
-    start = """✨ Добро пожаловать в бота для загрузки музыки и видео! Пропишите /help чтобы узнать подробнее."""
+    start = "Hi! Send me a link to a video and I send the video back. See /help for details."
 
     disabled = "This feature is turned off."
 
@@ -25,90 +25,146 @@ class BotText:
 
     error = "Something went wrong with this download."
 
+    bad_link = "Check the link and send it again."
+
+    received = "Request received, working on it..."
+
+    downloading = "▶️ Downloading..."
+
+    uploading = "📤 Uploading..."
+
+    done = "✅ Success"
+
+    speed = "Speed:"
+
+    eta = "ETA:"
+
+    caption = "{url}\n{filename}\n\nResolution: {width}x{height}\nDuration: {duration} seconds"
+
+    aria2_start = "Aria2 download starting..."
+
+    krakenfiles_start = "Processing krakenfiles download link..."
+
+    searching = "🔎 Searching YouTube..."
+
+    search_empty = "🔎 Nothing found for this search."
+
+    search_no_title = "No title"
+
+    search_no_link = "No link"
+
+    ping = "Pinging..."
+
+    ping_result = "Ping: {:.2f} ms"
+
+    pong = "Pong!"
+
+    flood_wait = "Telegram asked me to slow down. Please wait {} seconds..."
+
+    flood_file = "Your job will be done soon. Just wait!"
+
+    stats = (
+        "\n\n⌬─────「 Stats 」─────⌬\n\n"
+        "<b>╭🖥️ **CPU Usage »**</b>  __{cpu}%__\n"
+        "<b>├💾 **RAM Usage »**</b>  __{ram}%__\n"
+        "<b>╰🗃️ **DISK Usage »**</b>  __{disk}%__\n\n"
+        "<b>╭📤Upload:</b> {sent}\n"
+        "<b>╰📥Download:</b> {received}\n\n\n"
+        "<b>Memory Total:</b> {memory_total}\n"
+        "<b>Memory Free:</b> {memory_free}\n"
+        "<b>Memory Used:</b> {memory_used}\n"
+        "<b>SWAP Total:</b> {swap_total} | <b>SWAP Usage:</b> {swap_percent}%\n\n"
+        "<b>Total Disk Space:</b> {disk_total}\n"
+        "<b>Used:</b> {disk_used} | <b>Free:</b> {disk_free}\n\n"
+        "<b>Physical Cores:</b> {physical_cores}\n"
+        "<b>Total Cores:</b> {total_cores}\n\n"
+        "<b>🤖Bot Uptime:</b> {bot_uptime}\n"
+        "<b>⏲️OS Uptime:</b> {os_uptime}\n"
+    )
+
     help = """
-🎬 <b>Добро пожаловать в бота для загрузки видео/аудио/файлов!</b> 🎧
+<b>Send me a link to a video</b> and I send the video back.
 
-Просто отправь мне ссылку на видео или аудио! Поддерживается много сервисов через мощный движок yt-dlp, например:
-→ YouTube
-→ Rutube
-→ VK Видео
-→ SoundCloud
-📋 <b>Полный список:</b> [поддерживаемые сайты](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+I work with YouTube, Shorts, TikTok, Instagram and the other [sites yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). If your message has other text around the link, I use the first link in it.
 
-⚡ <b>Особенности загрузки видео:</b>
-→ По умолчанию разрешение Full HD (1080p, максимум 1440p)
-→ Ролики с русской аудиодорожкой (при наличии)
-→ Большие ролики загружаются в более низком разрешении (работает не для всех сервисов)
-→ По умолчанию загружаются в VP9 кодеке (при наличии), отличный баланс сжатия и производительности
-→ В файлы встраивается миниатюра и метаданные о ролике (например, эпизоды, описание и так далее)
-→ Для загрузки музыки рекомендуем выбрать аудио-режим в /settings, иначе будут возникать проблемы
-→ В данный момент не поддерживается загрузка плейлистов и трансляций.
+<b>What you get</b>
+→ Video up to 1080p by default, H.264 first so it plays inline in Telegram
+→ The original audio track, unless the owner set a preferred language
+→ Thumbnail and metadata embedded in the file
+→ Long videos may come in a lower resolution to stay under Telegram's 2 GB limit
 
-⚙️ <b>Настройка бота:</b>
-Настрой бота через /settings:
-→ Качество видео (1440p/1080p/720p/480p/240p)
-→ Режим отправки (видео/аудио/файл)
-→ Кодек видео (см. ниже)
+<b>Not supported</b>
+→ Playlists, channels and live streams
 
-🎥 <b>Видео-кодеки:</b>
-В /settings вы можете установить 4 кодека:
-→ <i>АВТО</i>: бот автоматически будет подбирать кодек (включайте, если бот загружает в более низком/высоком разрешении)
-→ <i>VP9</i>: кодек от Google, имеет неплохое сжатие и производительность
-→ <i>AVC1 (H.264)</i>: должен работать на всех устройствах (проверьте, если у вас очень слабое железо)
-→ <i>AV1</i>: отличное сжатие, но требуется его аппаратная поддержка
-
-📦 <b>Дополнительные возможности:</b>
-→ /direct — загрузка файлов напрямую
-→ /about — информация о разработчиках
-→ Напишите любой текст и бот найдёт 10 видео из YouTube
-
-🚨 <b>Важно знать:</b>
-1. При злоупотреблении я имею полное право вас заблокировать!
-2. Если видео не умещается в 2 гигабайта, бот автоматически будет понижать его разрешение или менять кодек ВНЕ зависимости от ваших настроек!
-3. Если бот не отвечает, попробуйте резервные версии от официального разработчика (они отличаются от этой версии, учтите):
-   EU🇪🇺: @benny_2ytdlbot
-   SG🇸🇬: @benny_ytdlbot
-
-💬 <b>По вопросам и предложениям:</b>
-@katze_942 | @katze_chat
+<b>Commands</b>
+/settings: quality, send as video, audio or file, video codec, SponsorBlock
+/ping: check that the bot is up
+/about: credits and license
     """
 
     about = """
-Оригинальный разработчик данного бота - @BennyThink:
-github.com/tgbot-collection/ytdlbot
+ytdlbot, a fork of github.com/Katze-942/ytdlbot, itself a fork of github.com/tgbot-collection/ytdlbot by BennyThink.
 
-Я, @katze_942, сделал форк со своими улучшениями:
-github.com/Katze-942/ytdlbot
+Original code by BennyThink, SanujaNS and contributors; intermediate fork by Katze-942 and contributors.
 
+License: Apache-2.0. Not affiliated with or endorsed by the upstream authors.
     """
 
     settings = """
-Пожалуйста, выберите предпочтительный формат, кодек и качество для вашего видео.
+Choose how I send your videos.
 
-<b>— Кодек видео</b>
-Рекомендуем оставить кодек VP9, однако, если бот загружает видео неправильного разрешения: используйте кодек АВТО.
+<b>Video codec</b>
+→ Auto (H.264 first): plays inline in every Telegram app. YouTube has H.264 only up to 1080p, so for 1440p choose VP9 or AV1.
+→ VP9: smaller files, up to 1440p on YouTube.
+→ AVC1 (H.264): H.264 only where the site has it.
+→ AV1: smallest files, but older devices may not play it.
 
-Для слабых устройств рекомендуем попробовать кодек AVC1.
+<b>Send as</b>
+Video plays in Telegram. File keeps the original file but needs another player. Choose audio for music.
 
-Для максимального сжатия используйте кодек AV1
+<b>SponsorBlock</b>
+Cuts sponsor segments out of YouTube videos. The video is not re-encoded, so some players may stutter at the cuts.
 
-<b>— Тип отправки</b>
-Если вы решите отправить видео в виде файла, вы не сможете просматривать видео напрямую в Telegram клиенте (потребуется сторонний видеоплеер).
-
-Пожалуйста, выберите тип «аудио», если хотите загрузить музыку!
-
-<b>— SponsorBlock</b>
-Вырезание рекламных вставок из видео YouTube.
-Из-за особенностей склейки без перекодирования видео может воспроизводиться некорректно на некоторых плеерах.
-
-<b>— Ваши параметры:</b>
-Качество видео: <b>{}</b>
-Тип отправки: <b>{}</b>
-Кодек видео: <b>{}</b>
+<b>Your settings</b>
+Quality: <b>{}</b>
+Send as: <b>{}</b>
+Codec: <b>{}</b>
 SponsorBlock: <b>{}</b>
-
-P.S: Если текст в кнопках не помещается, вы можете удержать палец на кнопке для чтения текста. 
     """
+
+    # stored setting value -> what the user sees in /settings and in the "saved" answer
+    names = {
+        "document": "File",
+        "video": "Video",
+        "audio": "Audio",
+        "vcodec-auto": "Auto (H.264 first)",
+        "vcodec-vp9": "VP9",
+        "vcodec-avc1": "AVC1 (H.264)",
+        "vcodec-av01": "AV1",
+        "disabled": "Off",
+        "remove": "On",
+    }
+
+    # callback data -> button label
+    buttons = {
+        "document": "Send as file",
+        "video": "Send as video",
+        "audio": "Send as audio",
+        "vcodec-auto": "Auto (H.264 first)",
+        "vcodec-vp9": "VP9",
+        "vcodec-avc1": "AVC1 (H.264)",
+        "vcodec-av01": "AV1 (smallest, needs a newer device)",
+        "sponsorblock-disabled": "Keep sponsor segments",
+        "sponsorblock-remove": "Cut sponsor segments",
+    }
+
+    # setting key -> answer shown after a settings button is pressed
+    saved = {
+        "format": "Send as: {}",
+        "quality": "Quality: {}",
+        "vcodec": "Codec: {}",
+        "sponsorblock": "SponsorBlock: {}",
+    }
 
 
 class Types:

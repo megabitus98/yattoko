@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -66,11 +66,6 @@ from engine import direct_entrance, youtube_entrance, special_download_entrance
 from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
 from utils.access import GUARDS
 
-localize_filetype=dict(document="Файл", video="Видео", audio="Аудио")
-localize_vcodec={"vcodec-auto": "АВТО", "vcodec-vp9": "VP9 (рекомендовано)", "vcodec-av01": "AV1 (самый сжатый, но требовательный)" ,"vcodec-avc1": "AVC1 (H.264)"}
-localize_sponsorblock = {"disabled": "Не вырезать рекламу", "remove": "Вырезать рекламу"}
-
-
 def search_ytb(kw: str, num_results: int = 10) -> str:
     # Single flat search query — no per-result extract_info (avoids N+1 latency)
     ydl_opts = {
@@ -85,12 +80,12 @@ def search_ytb(kw: str, num_results: int = 10) -> str:
     entries = (search_result or {}).get("entries") or []
     lines = []
     for index, entry in enumerate((e for e in entries if e), start=1):
-        title = entry.get("title", "Нет названия")
-        url = entry.get("url") or entry.get("webpage_url", "Нет ссылки")
+        title = entry.get("title", BotText.search_no_title)
+        url = entry.get("url") or entry.get("webpage_url", BotText.search_no_link)
         lines.append(f"<b>{index}. {title}</b>\n{url}")
 
     if not lines:
-        return "🔎 Ничего не нашёл по этому запросу."
+        return BotText.search_empty
     return "\n\n".join(lines)
 
 
@@ -127,15 +122,15 @@ def ping_handler(client: Client, message: types.Message):
 
     def send_message_and_measure_ping():
         start_time = int(round(time.time() * 1000))
-        reply: types.Message | typing.Any = client.send_message(chat_id, "Пинг...")
+        reply: types.Message | typing.Any = client.send_message(chat_id, BotText.ping)
 
         end_time = int(round(time.time() * 1000))
         ping_time = int(round(end_time - start_time))
         message_sent = True
         if message_sent:
-            message.reply_text(f"Ping: {ping_time:.2f} ms")
+            message.reply_text(BotText.ping_result.format(ping_time))
         time.sleep(0.5)
-        client.edit_message_text(chat_id=reply.chat.id, message_id=reply.id, text="Понг!")
+        client.edit_message_text(chat_id=reply.chat.id, message_id=reply.id, text=BotText.pong)
         time.sleep(1)
         client.delete_messages(chat_id=reply.chat.id, message_ids=reply.id)
 
@@ -156,23 +151,24 @@ def stats_handler(client: Client, message: types.Message):
     memory = psutil.virtual_memory()
     boot_time = psutil.boot_time()
 
-    stats = (
-        "\n\n⌬─────「 Статистика 」─────⌬\n\n"
-        f"<b>╭🖥️ **Использование ЦП »**</b>  __{cpu_usage}%__\n"
-        f"<b>├💾 **RAM »**</b>  __{memory.percent}%__\n"
-        f"<b>╰🗃️ **Использование диска »**</b>  __{disk}%__\n\n"
-        f"<b>╭📤Выгрузка:</b> {sizeof_fmt(psutil.net_io_counters().bytes_sent)}\n"
-        f"<b>╰📥Загрузка:</b> {sizeof_fmt(psutil.net_io_counters().bytes_recv)}\n\n\n"
-        f"<b>Общая память:</b> {sizeof_fmt(memory.total)}\n"
-        f"<b>Свободная память:</b> {sizeof_fmt(memory.available)}\n"
-        f"<b>Используемая память:</b> {sizeof_fmt(memory.used)}\n"
-        f"<b>Размер подкачки:</b> {sizeof_fmt(swap.total)} | <b>Используемая подкачка:</b> {swap.percent}%\n\n"
-        f"<b>Физическая память:</b> {sizeof_fmt(total)}\n"
-        f"<b>Используется:</b> {sizeof_fmt(used)} | <b>Свободно:</b> {sizeof_fmt(free)}\n\n"
-        f"<b>Количество физических ЦП ядер:</b> {psutil.cpu_count(logical=False)}\n"
-        f"<b>Общее количество ЦП ядер:</b> {psutil.cpu_count(logical=True)}\n\n"
-        f"<b>🤖Время работы бота:</b> {timeof_fmt(time.time() - botStartTime)}\n"
-        f"<b>⏲️Время работы системы:</b> {timeof_fmt(time.time() - boot_time)}\n"
+    stats = BotText.stats.format(
+        cpu=cpu_usage,
+        ram=memory.percent,
+        disk=disk,
+        sent=sizeof_fmt(psutil.net_io_counters().bytes_sent),
+        received=sizeof_fmt(psutil.net_io_counters().bytes_recv),
+        memory_total=sizeof_fmt(memory.total),
+        memory_free=sizeof_fmt(memory.available),
+        memory_used=sizeof_fmt(memory.used),
+        swap_total=sizeof_fmt(swap.total),
+        swap_percent=swap.percent,
+        disk_total=sizeof_fmt(total),
+        disk_used=sizeof_fmt(used),
+        disk_free=sizeof_fmt(free),
+        physical_cores=psutil.cpu_count(logical=False),
+        total_cores=psutil.cpu_count(logical=True),
+        bot_uptime=timeof_fmt(time.time() - botStartTime),
+        os_uptime=timeof_fmt(time.time() - boot_time),
     )
 
     message.reply_text(stats)
@@ -183,40 +179,18 @@ def settings_handler(client: Client, message: types.Message):
     user_id = message.from_user.id
     init_user(user_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
+    rows = [
+        ["document", "video", "audio"],
+        ["vcodec-auto", "vcodec-avc1", "vcodec-vp9"],
+        ["vcodec-av01"],
+        ["sponsorblock-disabled", "sponsorblock-remove"],
+        ["1440p", "1080p", "720p"],
+        ["480p", "240p"],
+    ]
     markup = types.InlineKeyboardMarkup(
         [
-            [
-                types.InlineKeyboardButton("Отправлять файл", callback_data="document"),
-                types.InlineKeyboardButton("Отправлять видео", callback_data="video"),
-                types.InlineKeyboardButton("Отправлять аудио", callback_data="audio"),
-            ],
-            [
-                types.InlineKeyboardButton(
-                    "Кодек AVC1 (H.264)", callback_data="vcodec-avc1"
-                ),
-                types.InlineKeyboardButton("Кодек VP9 (рекомендуется)", callback_data="vcodec-vp9"),
-                types.InlineKeyboardButton(
-                    "Кодек АВТО", callback_data="vcodec-auto"
-                ),
-            ],
-            [
-                types.InlineKeyboardButton(
-                    "Кодек AV1 (сжатый, требовательный к ресурсам)", callback_data="vcodec-av01"
-                ),
-            ],
-            [
-                types.InlineKeyboardButton("Не вырезать рекламу", callback_data="sponsorblock-disabled"),
-                types.InlineKeyboardButton("Вырезать рекламу", callback_data="sponsorblock-remove"),
-            ],
-            [
-                types.InlineKeyboardButton("Качество 1440p", callback_data="1440p"),
-                types.InlineKeyboardButton("Качество 1080p", callback_data="1080p"),
-                types.InlineKeyboardButton("Качество 720p", callback_data="720p"),
-            ],
-            [
-                types.InlineKeyboardButton("Качество 480p", callback_data="480p"),
-                types.InlineKeyboardButton("Качество 240p", callback_data="240p"),
-            ],
+            [types.InlineKeyboardButton(BotText.buttons.get(data, data), callback_data=data) for data in row]
+            for row in rows
         ]
     )
 
@@ -225,13 +199,15 @@ def settings_handler(client: Client, message: types.Message):
     vcodec = get_vcodec_settings(user_id)
     sponsorblock = get_sponsorblock_settings(user_id)
 
-    localize_send_type = localize_filetype.get(send_type, send_type)
-    localize_vcodec_local = localize_vcodec.get(vcodec, vcodec)
-    localized_sb = localize_sponsorblock.get(sponsorblock, sponsorblock)
-
+    names = BotText.names
     client.send_message(
         chat_id,
-        BotText.settings.format(quality, localize_send_type, localize_vcodec_local, localized_sb),
+        BotText.settings.format(
+            quality,
+            names.get(send_type, send_type),
+            names.get(vcodec, vcodec),
+            names.get(sponsorblock, sponsorblock),
+        ),
         reply_markup=markup,
     )
 
@@ -247,9 +223,9 @@ def direct_download(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("Direct download using aria2/requests start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Укажи корректную ссылку!")
+        message.reply_text(BotText.bad_link)
         return
-    bot_msg = message.reply_text("Запрос принят, обрабатываю...")
+    bot_msg = message.reply_text(BotText.received)
     try:
         direct_entrance(client, bot_msg, url)
     except Exception:
@@ -268,9 +244,9 @@ def spdl_handler(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("spdl start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Произошла какая-то ошибка, проверьте URL.")
+        message.reply_text(BotText.bad_link)
         return
-    bot_msg = message.reply_text("Запрос принят, обрабатываю....")
+    bot_msg = message.reply_text(BotText.received)
     try:
         special_download_entrance(client, bot_msg, url)
     except Exception:
@@ -288,13 +264,13 @@ def ytdl_handler(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("ytdl start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Check your URL.")
+        message.reply_text(BotText.bad_link)
         return
     if m3u8_blocked(url):
         message.reply_text(BotText.disabled)
         return
 
-    bot_msg = message.reply_text("Group download request received.")
+    bot_msg = message.reply_text(BotText.received)
     try:
         youtube_entrance(client, bot_msg, url)
     except Exception:
@@ -311,7 +287,7 @@ def reply_error(message: types.Message, url: str | None) -> None:
 def check_link(url: str):
     if re.findall(r"^https://www\.youtube\.com/channel/", url) or "list" in url:
         # TODO maybe using ytdl.extract_info
-        raise ValueError("📛 Загрузка плейлистов отключена!")
+        raise ValueError("Playlist or channel download are not supported at this moment.")
 
 
 def m3u8_blocked(url: str) -> bool:
@@ -334,7 +310,7 @@ def download_handler(client: Client, message: types.Message):
     try:
         # No URL -> treat the text as a YouTube search query
         if url is None:
-            reply = message.reply_text("🔎 Ищу ролики на YouTube...")
+            reply = message.reply_text(BotText.searching)
             text = search_ytb(message.text)
             client.edit_message_text(
                 chat_id=reply.chat.id,
@@ -346,19 +322,17 @@ def download_handler(client: Client, message: types.Message):
             return
 
         check_link(url)
-        bot_msg: types.Message | Any = message.reply_text(
-            "▶️ Загружаю...\nМогут наблюдаться проблемы с AV1 кодеком."
-        )
+        bot_msg: types.Message | Any = message.reply_text(BotText.downloading)
         client.send_chat_action(chat_id, enums.ChatAction.UPLOAD_VIDEO)
         youtube_entrance(client, bot_msg, url)
     except pyrogram.errors.Flood as e:
         f = BytesIO()
-        f.write(b"Your job will be done soon. Just wait!")
+        f.write(BotText.flood_file.encode())
         f.name = "Please wait.txt"
-        message.reply_document(f, caption=f"Пожалуйста, подожди {e.value} секунд...")
+        message.reply_document(f, caption=BotText.flood_wait.format(e.value))
         f.close()
         for owner_id in OWNERS:
-            client.send_message(owner_id, f"Пожалуйста, подожди {e.value} секунд...")
+            client.send_message(owner_id, BotText.flood_wait.format(e.value))
         time.sleep(e.value)
     except Exception:
         reply_error(message, url)
@@ -388,22 +362,22 @@ def save_setting(callback_query: types.CallbackQuery, key: str, choices: dict[st
 
 def format_callback(client: Client, callback_query: types.CallbackQuery):
     value = save_setting(callback_query, "format", FORMAT_CHOICES)
-    callback_query.answer(f"Вы установили тип отправки: {localize_filetype.get(value, value)}")
+    callback_query.answer(BotText.saved["format"].format(BotText.names.get(value, value)))
 
 
 def quality_callback(client: Client, callback_query: types.CallbackQuery):
     value = save_setting(callback_query, "quality", QUALITY_CHOICES)
-    callback_query.answer(f"Вы установили качество видео: {value}")
+    callback_query.answer(BotText.saved["quality"].format(value))
 
 
 def vcodec_callback(client: Client, callback_query: types.CallbackQuery):
     value = save_setting(callback_query, "vcodec", VCODEC_CHOICES)
-    callback_query.answer(f"Вы установили кодек: {localize_vcodec.get(value, value)}")
+    callback_query.answer(BotText.saved["vcodec"].format(BotText.names.get(value, value)))
 
 
 def sponsorblock_callback(client: Client, callback_query: types.CallbackQuery):
     value = save_setting(callback_query, "sponsorblock", SPONSORBLOCK_CHOICES)
-    callback_query.answer(f"SponsorBlock: {localize_sponsorblock.get(value, value)}")
+    callback_query.answer(BotText.saved["sponsorblock"].format(BotText.names.get(value, value)))
 
 
 HandlerSpec = tuple[type, Callable, Filter | None, int]

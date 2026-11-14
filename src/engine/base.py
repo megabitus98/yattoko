@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises)
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant
 
 import hashlib
 import json
@@ -24,7 +24,7 @@ import filetype
 from pyrogram import enums, types
 from tqdm import tqdm
 
-from config import TG_NORMAL_MAX_SIZE, TMPFILE_PATH, Types
+from config import TG_NORMAL_MAX_SIZE, TMPFILE_PATH, BotText, Types
 from database import Redis
 from database.model import (
     get_format_settings,
@@ -103,8 +103,8 @@ class BaseDownloader(ABC):
 
 🔌 {progress}
 🔌 {detail}
-{"" if len(speed) == 0 else "⚡️"} {more("Скорость:", speed)}
-{"" if len(eta) == 0 else "⏳"} {more("Осталось:", eta)}
+{"" if len(speed) == 0 else "⚡️"} {more(BotText.speed, speed)}
+{"" if len(eta) == 0 else "⏳"} {more(BotText.eta, eta)}
         """
         f.close()
         return text
@@ -115,17 +115,17 @@ class BaseDownloader(ABC):
             total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
 
             if total > TG_NORMAL_MAX_SIZE:
-                msg = f"Это видео весит {sizeof_fmt(total)}, я не могу..."
+                msg = f"Your download file size {sizeof_fmt(total)} is too large for Telegram."
                 raise Exception(msg)
 
             # percent = remove_bash_color(d.get("_percent_str", "N/A"))
             speed = self.__remove_bash_color(d.get("_speed_str", "N/A"))
             eta = self.__remove_bash_color(d.get("_eta_str", d.get("eta")))
-            text = self.__tqdm_progress("▶️ Загружаю...", total, downloaded, speed, eta)
+            text = self.__tqdm_progress(BotText.downloading, total, downloaded, speed, eta)
             self.edit_text(text)
 
     def upload_hook(self, current, total):
-        text = self.__tqdm_progress("📤 Выгружаю...", total, current)
+        text = self.__tqdm_progress(BotText.uploading, total, current)
         self.edit_text(text)
 
     @debounce(5)
@@ -210,7 +210,7 @@ class BaseDownloader(ABC):
         except Exception:
             thumb = None
 
-        caption = f"{self._url}\n{filename}\n\nРазрешение: {width}x{height}\nПродолжительность: {duration} секунд"
+        caption = BotText.caption.format(url=self._url, filename=filename, width=width, height=height, duration=duration)
         return dict(height=height, width=width, duration=duration, thumb=thumb, caption=caption)
 
     def _upload(self, files=None, meta=None):
@@ -291,7 +291,7 @@ class BaseDownloader(ABC):
 
         self._redis.add_cache(video_key, mapping)
         # change progress bar to done
-        self._bot_msg.edit_text("✅ Всё готово!")
+        self._bot_msg.edit_text(BotText.done)
         return success
 
     def _get_video_cache(self):

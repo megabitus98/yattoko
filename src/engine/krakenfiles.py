@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - krakenfiles.py
-# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text
+# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text, English texts from config.constant
 
 __author__ = "SanujaNS <sanujas@sanuja.biz>"
 
@@ -57,11 +57,11 @@ def krakenfiles_download(client, bot_message, url: str):
 
     def _download(url: str):
         try:
-            bot_message.edit_text("Processing krakenfiles download link...")
+            bot_message.edit_text(BotText.krakenfiles_start)
             form_data = _extract_form_data(url)
             download_url = _get_download_url(form_data)
 
-            bot_message.edit_text("▶️ Начинаю загрузку...")
+            bot_message.edit_text(BotText.downloading)
             downloader = DirectDownload(client, bot_message, download_url)
             downloader.start()
 

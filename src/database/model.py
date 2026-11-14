@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user
+# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first)
 
 from contextlib import contextmanager
 from typing import Literal
@@ -42,7 +42,7 @@ class Setting(Base):
     vcodec = Column(
         Enum("vcodec-auto", "vcodec-vp9", "vcodec-avc1", "vcodec-av01"),
         nullable=False,
-        default="vcodec-vp9",
+        default="vcodec-auto",
     )
     sponsorblock = Column(Enum("disabled", "remove"), nullable=False, default="disabled")
 
@@ -110,7 +110,7 @@ def get_vcodec_settings(
         if user and user.settings:
             return user.settings.vcodec
 
-        return "vcodec-vp9"
+        return "vcodec-auto"
 
 
 def get_sponsorblock_settings(tgid) -> Literal["disabled", "remove"]:
