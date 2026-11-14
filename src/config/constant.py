@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -24,6 +24,13 @@ class BotText:
     no_link = "Send me a link to a video."
 
     error = "Something went wrong with this download."
+
+    # download failures by kind (engine/errors.py); {site} is the display name, e.g. "Instagram"
+    login_required = "{site} needs a login for this video. The owner has been told."
+
+    blocked = "{site} is blocking downloads right now. The owner has been told. Try again later."
+
+    unavailable = "This video is private, deleted or not available here."
 
     bad_link = "Check the link and send it again."
 
@@ -62,6 +69,8 @@ class BotText:
     flood_wait = "Telegram asked me to slow down. Please wait {} seconds..."
 
     flood_file = "Your job will be done soon. Just wait!"
+
+    flood_file_name = "Please wait.txt"
 
     stats = (
         "\n\n⌬─────「 Stats 」─────⌬\n\n"
@@ -156,6 +165,11 @@ SponsorBlock: <b>{}</b>
         "vcodec-av01": "AV1 (smallest, needs a newer device)",
         "sponsorblock-disabled": "Keep sponsor segments",
         "sponsorblock-remove": "Cut sponsor segments",
+        "1440p": "1440p",
+        "1080p": "1080p",
+        "720p": "720p",
+        "480p": "480p",
+        "240p": "240p",
     }
 
     # setting key -> answer shown after a settings button is pressed

@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message
 
 import hashlib
 import json
@@ -21,7 +21,7 @@ from typing import final
 
 import ffmpeg
 import filetype
-from pyrogram import enums, types
+from pyrogram import enums, errors, types
 from tqdm import tqdm
 
 from config import TG_NORMAL_MAX_SIZE, TMPFILE_PATH, BotText, Types
@@ -31,6 +31,7 @@ from database.model import (
     get_quality_settings,
     get_vcodec_settings,
 )
+from engine.errors import classify, site_name, user_message
 from utils import debounce, sizeof_fmt
 
 
@@ -313,6 +314,12 @@ class BaseDownloader(ABC):
                 self._upload(file_id, meta)
             else:
                 self._start()
+        except errors.Flood:
+            raise  # the handler tells the user to wait
+        except Exception as e:
+            # one reply: the progress message becomes the error text; the traceback only goes to the log
+            logging.exception("Download failed for %s", self._url)
+            self._bot_msg.edit_text(user_message(classify(e), site_name(self._url)))
         finally:
             self._tempdir.cleanup()
 

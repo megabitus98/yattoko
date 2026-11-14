@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -63,6 +63,7 @@ from database.model import (
     set_user_settings,
 )
 from engine import direct_entrance, youtube_entrance, special_download_entrance
+from engine.errors import classify, site_name, user_message
 from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
 from utils.access import GUARDS
 
@@ -112,7 +113,7 @@ def about_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    client.send_message(chat_id, BotText.about)
+    client.send_message(chat_id, BotText.about, disable_web_page_preview=True)
 
 
 def ping_handler(client: Client, message: types.Message):
@@ -189,7 +190,7 @@ def settings_handler(client: Client, message: types.Message):
     ]
     markup = types.InlineKeyboardMarkup(
         [
-            [types.InlineKeyboardButton(BotText.buttons.get(data, data), callback_data=data) for data in row]
+            [types.InlineKeyboardButton(BotText.buttons[data], callback_data=data) for data in row]
             for row in rows
         ]
     )
@@ -228,8 +229,8 @@ def direct_download(client: Client, message: types.Message):
     bot_msg = message.reply_text(BotText.received)
     try:
         direct_entrance(client, bot_msg, url)
-    except Exception:
-        reply_error(message, url)
+    except Exception as e:
+        reply_error(message, url, e)
         bot_msg.delete()
 
 
@@ -249,8 +250,8 @@ def spdl_handler(client: Client, message: types.Message):
     bot_msg = message.reply_text(BotText.received)
     try:
         special_download_entrance(client, bot_msg, url)
-    except Exception:
-        reply_error(message, url)
+    except Exception as e:
+        reply_error(message, url, e)
         bot_msg.delete()
 
 
@@ -273,15 +274,16 @@ def ytdl_handler(client: Client, message: types.Message):
     bot_msg = message.reply_text(BotText.received)
     try:
         youtube_entrance(client, bot_msg, url)
-    except Exception:
-        reply_error(message, url)
+    except Exception as e:
+        reply_error(message, url, e)
         bot_msg.delete()
 
 
-def reply_error(message: types.Message, url: str | None) -> None:
-    # call from an except block: the traceback goes to the (redacted) log, never to the user
-    logging.exception("Download failed for %s", url)
-    message.reply_text(BotText.error)
+def reply_error(message: types.Message, url: str | None, err: BaseException) -> None:
+    # for failures outside BaseDownloader.start(), which replies by itself
+    # the traceback goes to the (redacted) log, never to the user
+    logging.error("Download failed for %s", url, exc_info=err)
+    message.reply_text(user_message(classify(err), site_name(url)))
 
 
 def check_link(url: str):
@@ -328,14 +330,14 @@ def download_handler(client: Client, message: types.Message):
     except pyrogram.errors.Flood as e:
         f = BytesIO()
         f.write(BotText.flood_file.encode())
-        f.name = "Please wait.txt"
+        f.name = BotText.flood_file_name
         message.reply_document(f, caption=BotText.flood_wait.format(e.value))
         f.close()
         for owner_id in OWNERS:
             client.send_message(owner_id, BotText.flood_wait.format(e.value))
         time.sleep(e.value)
-    except Exception:
-        reply_error(message, url)
+    except Exception as e:
+        reply_error(message, url, e)
 
 
 # Callback data -> stored setting value. The handler regexes are built from these keys and anchored,

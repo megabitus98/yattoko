@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - direct.py
-# Modified 2026 by megabitus98 (fork): BotText.error instead of exception text, English texts from config.constant
+# Modified 2026 by megabitus98 (fork): no exception text to users, English texts from config.constant, aria2 failures raise to BaseDownloader.start() instead of replying here
 
 import logging
 import re
@@ -97,14 +97,6 @@ class DirectDownload(BaseDownloader):
 
             return files
 
-        except subprocess.TimeoutExpired:
-            logging.error("Aria2 download timed out after 5 minutes for %s", self._url)
-            self._bot_msg.edit_text(BotText.error)
-            return []
-        except Exception:
-            logging.exception("Aria2 download failed for %s", self._url)
-            self._bot_msg.edit_text(BotText.error)
-            return []
         finally:
             if self._process:
                 self._process.terminate()
