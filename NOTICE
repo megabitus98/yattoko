@@ -1,0 +1,9 @@
+ytdlbot (megabitus98 fork)
+
+This product is a modified version of ytdlbot, licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It is a fork of Katze-942/ytdlbot (https://github.com/Katze-942/ytdlbot), intermediate fork by Katze-942 and contributors, which is itself a fork of tgbot-collection/ytdlbot (https://github.com/tgbot-collection/ytdlbot), original code by BennyThink, SanujaNS and contributors.
+
+Files changed in this fork carry a "Modified 2026 by megabitus98 (fork)" line under their header.
+
+This fork is not affiliated with or endorsed by the upstream authors.

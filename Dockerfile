@@ -1,4 +1,4 @@
-# Modified 2026 by megabitus98 (fork): uv, pinned base, non-root, runtime and test targets, caches and scratch under /tmp
+# Modified 2026 by megabitus98 (fork): uv, pinned base, non-root, runtime and test targets, caches and scratch under /tmp, /data owned by app (a new Docker volume copies that owner)
 
 FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
@@ -16,7 +16,8 @@ LABEL org.opencontainers.image.source="https://github.com/megabitus98/ytdlbot" \
 
 RUN apk add --no-cache ffmpeg deno aria2 \
     && addgroup -g 10001 app \
-    && adduser -D -H -u 10001 -G app app
+    && adduser -D -H -u 10001 -G app app \
+    && install -d -o app -g app /data
 
 ENV UV_PYTHON_DOWNLOADS=0 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \

@@ -1,49 +1,18 @@
+# Local run: one container, SQLite on the data volume, no Redis or other database.
+# Modified 2026 by megabitus98 (fork): one service built from this repository, volumes for /data and /tmp, read-only root
 services:
-  redis:
-    image: redis:7-alpine
+  ytdlbot:
+    build:
+      context: .
+      target: runtime
+    image: ytdlbot:local
+    env_file: .env
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  mysql:
-    image: ubuntu/mysql:8.0-22.04_beta
-    restart: always
+    read_only: true
     volumes:
-      - ./db_data:/var/lib/mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: "root"
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    command:
-      - --default-authentication-plugin=mysql_native_password
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --explicit_defaults_for_timestamp=1
-      - --max_allowed_packet=64M
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - ytdlbot-data:/data
+      - ytdlbot-tmp:/tmp
 
-  ytdl:
-    image: katze-942/ytdlbot
-    env_file:
-      - .env
-    restart: always
-    volumes:
-      - ./youtube-cookies.txt:/app/youtube-cookies.txt
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
+volumes:
+  ytdlbot-data:
+  ytdlbot-tmp:

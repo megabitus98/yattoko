@@ -1,68 +1,38 @@
 # AGENTS.md
 
-Personal fork of `tgbot-collection/ytdlbot`: a Kurigram (pyrogram fork) Telegram
-bot that downloads video/audio/files via yt-dlp (+ aria2/requests for direct links).
-Russian UI. No test suite.
+Guidance for coding agents (and people) working in this repository. `CLAUDE.md` imports this file; keep one copy of the facts here.
+
+ytdlbot is a Telegram bot for a small allow-listed group: send a link in a private chat, get the video back. Kurigram (a pyrogram fork, imported as `pyrogram`) for Telegram, yt-dlp for downloads, SQLite for settings. English UI. Fork of Katze-942/ytdlbot, itself a fork of tgbot-collection/ytdlbot (credit in `README.md` and `NOTICE`).
 
 ## Commands
-- Install: `pdm install` (preferred) or `pip install -r requirements.txt`
-- Run: `python main.py` **from `src/`** — imports are top-level package names
-  (`config`, `engine`, `database`), so `cwd` MUST be `src/`. Needs populated `.env`.
-- Format: `black .` (no config, no line-length override)
-- Regenerate `requirements.txt` from `pyproject.toml`: `python pre-push.py`
-  (dependabot uses this; strips version specs to the pinned form). Edit deps in
-  `pyproject.toml`, never `requirements.txt` directly.
-- Local infra: `docker-compose up -d` (Redis + MySQL; `ytdl` service expects a
-  prebuilt `katze-942/ytdlbot` image).
 
-## Setup
-- Copy `.env.example` → `.env`. Required: `APP_ID`, `APP_HASH`, `BOT_TOKEN`, `OWNER`.
-- `DB_DSN` is read directly via `os.getenv` in `database/model.py` at import time
-  (NOT through the `config` layer) — must be set or `create_engine` fails on startup.
-  SQLite (`sqlite:///db.sqlite`) or MySQL both work.
-- `REDIS_HOST` empty → falls back to `fakeredis` (no Redis needed locally).
-- YouTube needs a JS runtime for yt-dlp: install `deno` (bundled in Docker image).
-- `config/__init__.py` calls `load_dotenv()` + sets up logging as an import side
-  effect — importing anything from `config` loads `.env`.
+- Install: `uv sync` (Python 3.12, from `uv.lock`). Edit dependencies in `pyproject.toml`, then `uv lock`.
+- Unit tests: `uv run pytest -q`. No network, no Telegram. `tests/conftest.py` sets safe env values (`APP_ID=1`, `OWNER=1`, `AUTHORIZED_USER=1,2`, `DATA_DIR`/`TMPFILE_PATH`/`DB_DSN` under a temp dir) before any app module is imported, so a local `.env` never reaches the tests.
+- Repository checks: `uv run pytest -q tests/repo` (README, NOTICE, removed files, the fork notice line; they need a full git checkout, and `.dockerignore` keeps them out of the image).
+- Image: `docker build --target test -t ytdlbot:test . && docker run --rm ytdlbot:test` runs the unit tests against the runtime layers. `docker build --target runtime -t ytdlbot:dev .` builds the shipped image.
+- Self-check: `python main.py --self-check` (in `src/` or the image) prints yt-dlp, curl-cffi and kurigram versions, whether impersonation works and whether `DATA_DIR` and `TMPFILE_PATH` are writable, as JSON; exit 1 if any check fails. It creates no Telegram client.
+- Local run: `docker compose up -d` (one service, image `ytdlbot:local`, volumes for `/data` and `/tmp`, read-only root). Without Docker: set `DATA_DIR` and `TMPFILE_PATH` to local paths in `.env`, then `cd src && uv run python main.py`.
+- Format: `black`.
 
-## Architecture
-- `src/main.py`: bot entry. Handlers are **synchronous** (Kurigram runs them across
-  `WORKERS` threads). `download_handler` (any private text) is the primary entry.
-  The `private_use` decorator gates all handlers: drops non-private messages unless
-  they start with `/ytdl`, then enforces the `AUTHORIZED_USER` allowlist.
-- `src/engine/__init__.py`: three entrypoints.
-  - `youtube_entrance` → `generic.py::YoutubeDownload` — main path for **ALL**
-    yt-dlp-supported sites, not just YouTube.
-  - `direct_entrance` → `direct.py::DirectDownload` — aria2 (`ENABLE_ARIA2`) or
-    requests fallback. `/direct`.
-  - `special_download_entrance` → routed by **hostname suffix** via `DOWNLOADER_MAP`
-    (pixeldrain / krakenfiles / instagram). `/spdl`. YouTube URLs here raise.
-- `src/engine/base.py`: `BaseDownloader` (ABC) is the spine. Subclasses implement
-  `_setup_formats`/`_download`/`_start`. `@final start()` drives lifecycle:
-  cache lookup (`_get_video_cache`) → hit reuses Telegram `file_id`, miss runs
-  `_start()`; per-download tempdir cleaned in `finally`.
-- `src/database/`: `cache.py` (Redis db=1, fakeredis fallback; key = md5 of
-  url+quality+format+vcodec → stores `file_id`+meta). `model.py` (SQLAlchemy
-  `User`/`Setting`, `create_all` auto-creates tables; all access via
-  `session_manager()`).
-- `src/utils/__init__.py`: `sizeof_fmt`, `timeof_fmt`, `is_youtube`, `debounce`
-  (used by progress-bar throttling in `base.py`).
+## Layout
 
-## Quirks
-- **yt-dlp is NOT pinned** anymore: `yt-dlp>=2026.6.9` + `yt-dlp-ejs` (JS-runtime
-  extractor). Kurigram is pinned (`kurigram==2.2.23`).
-- yt-dlp opts in `generic.py`: `source_address: "0.0.0.0"` (forces IPv4);
-  `playlist_items: 1` (blocks channel/playlist mass-download). Cookies via
-  `BROWSERS` env or `youtube-cookies.txt`; optional `POTOKEN`; proxy from `YT_DLP_PROXY`.
-  No default browser cookies — set `BROWSERS` or drop a cookies file if YouTube fails.
-- `check_link` (`main.py`) blocks YouTube `channel/` URLs, any URL containing `list`
-  (playlists), and `m3u8` unless `M3U8_SUPPORT`.
-- Text without `http(s)://` is treated as a **YouTube search query** (`search_ytb`).
-- Instagram needs an external service at `http://instagram:15000/?url=...` — a
-  separate container NOT defined in this repo's `docker-compose.yml`.
-- `.python-version` is `3.14` but Docker uses `python:3.12-alpine`; `requires-python
-  >=3.10`. Dockerfile installs `ffmpeg`, `aria2`, `deno`, copies `.venv` libs to the
-  system path, and runs `python main.py` from `/app` (no editable install).
-- VIP/quota/payments were removed from this fork — do not reintroduce unless asked.
-- `CLAUDE.md` has deeper flow notes but its VIP/quota/`Payment`/`engine/helper.py`
-  sections are **stale** (that code no longer exists). Trust the code over it.
+- `src/main.py`: plain handler functions, `handler_table() -> list[HandlerSpec]` (`HandlerSpec = tuple[type, Callable, Filter | None, int]`: handler class, callback, filters, group) and `create_app() -> Client`, which registers every entry with `app.add_handler(cls(callback, filters), group)`. Importing `main` builds no client. Tests about which handlers exist inspect `handler_table()`, not `app.dispatcher.groups`.
+- `src/utils/access.py`: the access guard. `GUARDS` puts one message guard and one callback guard at dispatcher group -1, before every other handler. A sender who is not in `OWNER` or `AUTHORIZED_USER` ends dispatch with `stop_propagation()`; in a private chat they get their Telegram ID at most once a day (in-memory throttle). Messages without a sender are dropped. Group messages are dropped unless `ENABLE_GROUPS` is on.
+- `src/config/config.py`: every env var is read here, strictly. Blank means default; a bad ID list, boolean or integer raises `ConfigError` at import, so the bot does not start. `OWNERS`, `AUTHORIZED_USERS`, `ALLOWED_USERS` are frozensets; empty means nobody. Feature switches: `ENABLE_SEARCH`, `ENABLE_DIRECT`, `ENABLE_ARIA2`, `ENABLE_SPDL`, `ENABLE_STATS`, `ENABLE_GROUPS`, `M3U8_SUPPORT`, all false by default. `check_paths()` refuses a `TMPFILE_PATH` that overlaps `DATA_DIR`. Exceptions: `BROWSERS` and `POTOKEN` are read with `os.getenv` in `engine/generic.py`.
+- `src/config/constant.py`: `BotText`, every user-facing string. A test fails on Cyrillic anywhere in `src/`.
+- `src/config/__init__.py`: `load_dotenv()`, re-exports `config.config` and `config.constant`, and installs the root log handler with `utils.redact.RedactingFormatter`, which masks the bot token, credentials in URLs and cookie values in every formatted line, tracebacks included. Importing anything from `config` has these side effects.
+- `src/engine/__init__.py`: `youtube_entrance` (`engine/generic.py`, yt-dlp, the path for every site), `direct_entrance` (`/direct`, requests or aria2) and `special_download_entrance` (`/spdl`, pixeldrain, krakenfiles, Instagram through an external service at `http://instagram:15000`).
+- `src/engine/base.py`: `BaseDownloader`. `start()` looks up the file cache (key: url, quality, format, codec), reuses the Telegram `file_id` on a hit, otherwise runs `_start()` (download, then upload); the per-job temp dir under `TMPFILE_PATH` is removed in `finally`. Sending as video tries video, animation, audio, photo in order and raises `RuntimeError` if all fail (kurigram 2.2.27 raises on a failed upload).
+- `src/engine/generic.py`: `build_format_options()` builds the format string (size-capped ladder), `format_sort` with the codec first (H.264 for "auto") and `merge_output_format: mp4`. `PREFERRED_AUDIO_LANG` picks the audio track; empty means the original. yt-dlp logs through the root logger; no verbose mode.
+- `src/database/model.py`: SQLAlchemy `User` and `Setting`; engine from `DB_DSN` (default SQLite in `DATA_DIR`, WAL, 30 s busy timeout); `init_user` is insert-or-ignore; all access through `session_manager()`. `src/database/migrate.py`: check-and-`ALTER` helper for columns added later. `src/database/cache.py`: Redis at `REDIS_HOST`, fakeredis when unset or unreachable.
+- `src/selfcheck.py`: the `--self-check` logic.
+
+## Rules
+
+- User errors: reply `BotText.error` and log the traceback with `logging.exception`; never put exception text, paths, hostnames or proxy details in a Telegram message. Never log secrets (bot token, `APP_HASH`, cookie values, proxy credentials).
+- Every source file changed in this fork carries one line under its header: `# Modified 2026 by megabitus98 (fork): <what changed>`. Keep existing `__author__` lines and the `By @BennyThink` banner (Apache-2.0, section 4(c)). `tests/repo` checks the line.
+- No private details in the repository: no IP addresses, Telegram IDs, hostnames or proxy URLs of the owner. Examples use `123456789` and `http://proxy.example:8080`.
+- Unit tests make no network calls and never connect to Telegram.
+- Settings callbacks are matched by anchored regexes built from dicts in `main.py` and saved under the presser's user ID.
+- Not supported on purpose: playlists and channels (`check_link` refuses them, and yt-dlp runs with `playlist_items: 1`), live streams (`match_filter`). yt-dlp uses `source_address: 0.0.0.0` (IPv4 only).
+- The image runs as uid 10001 with a read-only root: `HOME`, `XDG_CACHE_HOME` and `DENO_DIR` point under `/tmp`; `/data` is the only other writable path.

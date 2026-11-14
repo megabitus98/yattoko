@@ -21,7 +21,7 @@ from io import BytesIO
 from typing import Any
 
 if __name__ == "__main__" and "--self-check" in sys.argv[1:]:
-    # ponytail: runs before the app imports below, so it needs no bot config, database or Telegram client
+    # runs before the app imports below, so it needs no bot config, database or Telegram client
     import json
 
     from selfcheck import run_selfcheck
