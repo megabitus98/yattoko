@@ -37,3 +37,23 @@ os.environ.update(
     }
 )
 os.makedirs(os.environ["DATA_DIR"], exist_ok=True)
+
+import pytest  # noqa: E402  (after the env above on purpose)
+
+
+@pytest.fixture
+def downloads(monkeypatch):
+    # Every way a handler can start work; a blocked or disabled path must reach none of them.
+    import main
+
+    calls = []
+    for name in (
+        "direct_entrance",
+        "special_download_entrance",
+        "youtube_entrance",
+        "search_ytb",
+    ):
+        monkeypatch.setattr(
+            main, name, lambda *args, _name=name, **kwargs: calls.append(_name)
+        )
+    return calls

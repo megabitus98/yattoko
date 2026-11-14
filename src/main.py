@@ -4,11 +4,10 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID
 
 __author__ = "Benny <benny.think@gmail.com>"
 
-import functools
 import logging
 import os
 import re
@@ -39,7 +38,6 @@ from pyrogram.filters import Filter
 from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 
 from config import (
-    ALLOWED_USERS,
     APP_HASH,
     APP_ID,
     BOT_TOKEN,
@@ -63,7 +61,8 @@ from database.model import (
     set_user_settings,
 )
 from engine import direct_entrance, youtube_entrance, special_download_entrance
-from utils import extract_url_and_name, sizeof_fmt, timeof_fmt
+from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
+from utils.access import GUARDS
 
 localize_filetype=dict(document="Файл", video="Видео", audio="Аудио")
 localize_vcodec={"vcodec-auto": "АВТО", "vcodec-vp9": "VP9 (рекомендовано)", "vcodec-av01": "AV1 (самый сжатый, но требовательный)" ,"vcodec-avc1": "AVC1 (H.264)"}
@@ -91,26 +90,6 @@ def search_ytb(kw: str, num_results: int = 10) -> str:
     if not lines:
         return "🔎 Ничего не нашёл по этому запросу."
     return "\n\n".join(lines)
-
-
-def private_use(func):
-    @functools.wraps(func)
-    def wrapper(client: Client, message: types.Message):
-        chat_id = getattr(message.from_user, "id", None)
-
-        # message type check
-        if message.chat.type != enums.ChatType.PRIVATE and not getattr(message, "text", "").lower().startswith("/ytdl"):
-            logging.debug("%s, it's annoying me...🙄️ ", message.text)
-            return
-
-        # allowed users check (owners included); an empty list allows nobody
-        if chat_id not in ALLOWED_USERS:
-            message.reply_text(BotText.private)
-            return
-
-        return func(client, message)
-
-    return wrapper
 
 
 def start_handler(client: Client, message: types.Message):
@@ -199,7 +178,8 @@ def stats_handler(client: Client, message: types.Message):
 
 def settings_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
-    init_user(chat_id)
+    user_id = message.from_user.id
+    init_user(user_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
     markup = types.InlineKeyboardMarkup(
         [
@@ -238,10 +218,10 @@ def settings_handler(client: Client, message: types.Message):
         ]
     )
 
-    quality = get_quality_settings(chat_id)
-    send_type = get_format_settings(chat_id)
-    vcodec = get_vcodec_settings(chat_id)
-    sponsorblock = get_sponsorblock_settings(chat_id)
+    quality = get_quality_settings(user_id)
+    send_type = get_format_settings(user_id)
+    vcodec = get_vcodec_settings(user_id)
+    sponsorblock = get_sponsorblock_settings(user_id)
 
     localize_send_type = localize_filetype.get(send_type, send_type)
     localize_vcodec_local = localize_vcodec.get(vcodec, vcodec)
@@ -333,23 +313,24 @@ def m3u8_blocked(url: str) -> bool:
     return not M3U8_SUPPORT and bool(re.search(r"m3u8|\.m3u$", url.lower()))
 
 
-@private_use
 def download_handler(client: Client, message: types.Message):
     chat_id = message.from_user.id
-    url = message.text
-    is_link = bool(re.findall(r"^https?://", url.lower()))
-    if (not is_link and not ENABLE_SEARCH) or (is_link and m3u8_blocked(url)):
+    url = extract_first_url(message.text)
+    if url is None and not ENABLE_SEARCH:
+        message.reply_text(BotText.no_link)
+        return
+    if url is not None and m3u8_blocked(url):
         message.reply_text(BotText.disabled)
         return
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    logging.info("start %s", url)
+    logging.info("start %s", url or message.text)
 
     try:
         # No URL -> treat the text as a YouTube search query
-        if not is_link:
+        if url is None:
             reply = message.reply_text("🔎 Ищу ролики на YouTube...")
-            text = search_ytb(url)
+            text = search_ytb(message.text)
             client.edit_message_text(
                 chat_id=reply.chat.id,
                 message_id=reply.id,
@@ -382,38 +363,46 @@ def download_handler(client: Client, message: types.Message):
         message.reply_text(f"❌ Произошла ошибка!: {e}")
 
 
+# Callback data -> stored setting value. The handler regexes are built from these keys and anchored,
+# so only exact button data matches; anything else never reaches the database.
+FORMAT_CHOICES = {"document": "document", "video": "video", "audio": "audio"}
+QUALITY_CHOICES = {q: q for q in ("1440p", "1080p", "720p", "480p", "240p")}
+VCODEC_CHOICES = {v: v for v in ("vcodec-auto", "vcodec-vp9", "vcodec-avc1", "vcodec-av01")}
+SPONSORBLOCK_CHOICES = {"sponsorblock-disabled": "disabled", "sponsorblock-remove": "remove"}
+
+
+def choice_filter(choices: dict[str, str]) -> Filter:
+    return filters.regex("^(" + "|".join(map(re.escape, choices)) + ")$")
+
+
+def save_setting(callback_query: types.CallbackQuery, key: str, choices: dict[str, str]) -> str:
+    # saved for the person who pressed the button, not for the chat the button is in
+    user_id = callback_query.from_user.id
+    value = choices[callback_query.data]
+    init_user(user_id)
+    set_user_settings(user_id, key, value)
+    logging.info("Setting %s %s to %s", user_id, key, value)
+    return value
+
+
 def format_callback(client: Client, callback_query: types.CallbackQuery):
-    chat_id = callback_query.message.chat.id
-    data = callback_query.data
-    logging.info("Setting %s file type to %s", chat_id, data)
-    callback_query.answer(
-        f"Вы установили тип отправки: {localize_filetype.get(callback_query.data, callback_query.data)}"
-    )
-    set_user_settings(chat_id, "format", data)
+    value = save_setting(callback_query, "format", FORMAT_CHOICES)
+    callback_query.answer(f"Вы установили тип отправки: {localize_filetype.get(value, value)}")
 
 
 def quality_callback(client: Client, callback_query: types.CallbackQuery):
-    chat_id = callback_query.message.chat.id
-    data = callback_query.data
-    logging.info("Setting %s download quality to %s", chat_id, data)
-    callback_query.answer(f"Вы установили качество видео: {callback_query.data}")
-    set_user_settings(chat_id, "quality", data)
+    value = save_setting(callback_query, "quality", QUALITY_CHOICES)
+    callback_query.answer(f"Вы установили качество видео: {value}")
 
 
 def vcodec_callback(client: Client, callback_query: types.CallbackQuery):
-    chat_id = callback_query.message.chat.id
-    data = callback_query.data
-    logging.info("Setting %s download vcodec to %s", chat_id, data)
-    callback_query.answer(f"Вы установили кодек: {localize_vcodec.get(callback_query.data, callback_query.data)}")
-    set_user_settings(chat_id, "vcodec", data)
+    value = save_setting(callback_query, "vcodec", VCODEC_CHOICES)
+    callback_query.answer(f"Вы установили кодек: {localize_vcodec.get(value, value)}")
 
 
 def sponsorblock_callback(client: Client, callback_query: types.CallbackQuery):
-    chat_id = callback_query.message.chat.id
-    data = callback_query.data.replace('sponsorblock-', '')
-    logging.info("Setting %s sponsorblock to %s", chat_id, data)
-    callback_query.answer(f"SponsorBlock: {localize_sponsorblock.get(data, data)}")
-    set_user_settings(chat_id, "sponsorblock", data)
+    value = save_setting(callback_query, "sponsorblock", SPONSORBLOCK_CHOICES)
+    callback_query.answer(f"SponsorBlock: {localize_sponsorblock.get(value, value)}")
 
 
 HandlerSpec = tuple[type, Callable, Filter | None, int]
@@ -421,8 +410,9 @@ HandlerSpec = tuple[type, Callable, Filter | None, int]
 
 def handler_table() -> list[HandlerSpec]:
     # Order matters: within a group the first matching handler wins, so the catch-all text handler
-    # must stay after the commands.
+    # must stay after the commands. The access guards run first, at group -1.
     return [
+        *GUARDS,
         (MessageHandler, start_handler, filters.command(["start"]), 0),
         (MessageHandler, help_handler, filters.command(["help"]), 0),
         (MessageHandler, about_handler, filters.command(["about"]), 0),
@@ -432,11 +422,11 @@ def handler_table() -> list[HandlerSpec]:
         (MessageHandler, direct_download, filters.command(["direct"]), 0),
         (MessageHandler, spdl_handler, filters.command(["spdl"]), 0),
         (MessageHandler, ytdl_handler, filters.command(["ytdl"]) & filters.group, 0),
-        (MessageHandler, download_handler, filters.incoming & filters.text, 0),
-        (CallbackQueryHandler, format_callback, filters.regex(r"document|video|audio"), 0),
-        (CallbackQueryHandler, quality_callback, filters.regex(r"1440p|1080p|720p|480p|240p"), 0),
-        (CallbackQueryHandler, vcodec_callback, filters.regex(r"vcodec-vp9|vcodec-avc1|vcodec-av01|vcodec-auto"), 0),
-        (CallbackQueryHandler, sponsorblock_callback, filters.regex(r"sponsorblock-disabled|sponsorblock-remove"), 0),
+        (MessageHandler, download_handler, filters.private & filters.incoming & filters.text, 0),
+        (CallbackQueryHandler, format_callback, choice_filter(FORMAT_CHOICES), 0),
+        (CallbackQueryHandler, quality_callback, choice_filter(QUALITY_CHOICES), 0),
+        (CallbackQueryHandler, vcodec_callback, choice_filter(VCODEC_CHOICES), 0),
+        (CallbackQueryHandler, sponsorblock_callback, choice_filter(SPONSORBLOCK_CHOICES), 0),
     ]
 
 

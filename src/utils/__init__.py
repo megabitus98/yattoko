@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - __init__.py.py
+# Modified 2026 by megabitus98 (fork): extract_first_url for links with text around them
 
 
 import functools
@@ -39,6 +40,12 @@ def is_youtube(url: str) -> bool:
 
     except Exception:
         return False
+
+
+def extract_first_url(text: str | None) -> str | None:
+    # share sheets and chats wrap the link in other text; take the first http(s) URL
+    match = re.search(r"https?://\S+", text or "", re.IGNORECASE)
+    return match.group(0).rstrip(").,") if match else None
 
 
 def extract_url_and_name(message_text):

@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -19,7 +19,9 @@ class BotText:
 
     disabled = "This feature is turned off."
 
-    private = """⛔ Извините, у вас нет доступа к этому боту."""
+    denied = "You don't have access to this bot. Your Telegram ID is {user_id}. Send it to the owner to get access."
+
+    no_link = "Send me a link to a video."
 
     help = """
 🎬 <b>Добро пожаловать в бота для загрузки видео/аудио/файлов!</b> 🎧
