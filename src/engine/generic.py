@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS)
 
 import logging
 import os
@@ -12,13 +12,15 @@ import yt_dlp
 
 from config import (
     AUDIO_FORMAT,
+    COOKIES_DIR,
     PREFERRED_AUDIO_LANG,
     YT_DLP_PROXY,
 )
 
-from utils import is_youtube
 from database.model import get_format_settings, get_sponsorblock_settings
 from engine.base import BaseDownloader
+from engine.cookies import cookie_options
+from engine.sites import site_for_url
 
 # codec setting -> (filter on the first format rungs, codec the sort prefers)
 CODECS = {
@@ -134,24 +136,19 @@ class YoutubeDownload(BaseDownloader):
             ]
             ydl_opts["postprocessors"] = sponsorblock_pps + ydl_opts["postprocessors"]
 
-        # setup cookies for youtube only
-        if is_youtube(self._url):
-            # use cookies from browser firstly
-            if browsers := os.getenv("BROWSERS"):
-                ydl_opts["cookiesfrombrowser"] = browsers.split(",")
-            if os.path.isfile("youtube-cookies.txt") and os.path.getsize("youtube-cookies.txt") > 100:
-                ydl_opts["cookiefile"] = "youtube-cookies.txt"
-            # add PO Token if present: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
-            if potoken := os.getenv("POTOKEN"):
-                ydl_opts["extractor_args"] = {
-                    "youtube": {
-                        "player_client": ["web", "default"],
-                        "po_token": [f"web+{potoken}"],
-                    }
+        site = site_for_url(self._url)
+        # add PO Token if present: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+        if site == "youtube" and (potoken := os.getenv("POTOKEN")):
+            ydl_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["web", "default"],
+                    "po_token": [f"web+{potoken}"],
                 }
+            }
 
         files = None
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        # the site's cookies file, if there is one, as a fresh in-memory copy for this YoutubeDL only
+        with yt_dlp.YoutubeDL(ydl_opts | cookie_options(Path(COOKIES_DIR), site)) as ydl:
             ydl.download([self._url])
         files = list(Path(self._tempdir.name).glob("*"))
         return files

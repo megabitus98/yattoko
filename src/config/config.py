@@ -4,7 +4,7 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -91,6 +91,8 @@ DATA_DIR = _raw("DATA_DIR") or "/data"
 TMPFILE_PATH = _raw("TMPFILE_PATH") or "/tmp/ytdlbot"
 DB_DSN = _raw("DB_DSN") or f"sqlite:///{DATA_DIR}/ytdlbot.db"
 REDIS_HOST = _raw("REDIS_HOST")
+# one Netscape cookies file per site: <COOKIES_DIR>/instagram.txt, youtube.txt, tiktok.txt, ...
+COOKIES_DIR = _raw("COOKIES_DIR") or "/cookies"
 
 AUDIO_FORMAT = _raw("AUDIO_FORMAT") or "m4a"
 PREFERRED_AUDIO_LANG = _raw("PREFERRED_AUDIO_LANG") or ""

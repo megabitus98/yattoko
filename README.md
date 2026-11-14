@@ -24,7 +24,7 @@ A Telegram bot for a small allow-listed group of people. Send it a link in a pri
 | `/settings` | Quality, send as, codec, SponsorBlock |
 | `/stats` | Server stats, owners only, needs `ENABLE_STATS` |
 | `/direct <url>` | Download a file over plain HTTP (aria2 with `ENABLE_ARIA2`), needs `ENABLE_DIRECT` |
-| `/spdl <url>` | pixeldrain, krakenfiles and Instagram through an external service, needs `ENABLE_SPDL` |
+| `/spdl <url>` | pixeldrain and krakenfiles, needs `ENABLE_SPDL` |
 | `/ytdl <url>` | Download in a group, needs `ENABLE_GROUPS` |
 
 ## Configuration
@@ -47,7 +47,7 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `AUDIO_FORMAT` | `m4a` | Audio format preferred when a user sends as audio |
 | `PREFERRED_AUDIO_LANG` | empty | Audio language to prefer, e.g. `en`. Empty: the original track |
 | `YT_DLP_PROXY` | empty | Proxy for yt-dlp, e.g. `http://proxy.example:8080`. Empty: direct connection |
-| `BROWSERS` | empty | YouTube only: yt-dlp's cookies-from-browser value, e.g. `firefox`. The image has no browser |
+| `COOKIES_DIR` | `/cookies` | Directory with one Netscape cookies file per site, see below |
 | `POTOKEN` | empty | YouTube only: a PO token, see yt-dlp's [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) |
 | `ENABLE_SEARCH` | `false` | Text without a link searches YouTube. Off: the bot asks for a link |
 | `ENABLE_DIRECT` | `false` | `/direct` |
@@ -57,7 +57,7 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `ENABLE_GROUPS` | `false` | `/ytdl` in groups. Off: group messages are ignored |
 | `M3U8_SUPPORT` | `false` | m3u8 links. Off: refused |
 
-For YouTube, a Netscape cookies file named `youtube-cookies.txt` in the working directory (`/app` in the image) is used when it exists.
+Cookies are per site: `COOKIES_DIR/instagram.txt`, `youtube.txt`, `tiktok.txt`, and for other sites the yt-dlp extractor name in lower case (`vimeo.txt`). The site is the one yt-dlp's extractor would pick for the link. When the file for a site exists and is not empty, every download from that site uses it; otherwise the bot tries without a login. The bot only reads the files: each download gets an in-memory copy, so the directory can be a read-only mount (in Compose, add `- ./cookies:/cookies:ro` under `volumes`). Use a spare account for each site, not a personal one: every allowed user's downloads run as that account.
 
 ## Run locally with Docker Compose
 
@@ -86,6 +86,7 @@ This list is written from the code at this fork's head, compared with Katze-942/
 - **Format choice.** H.264 first and merged into MP4 so Telegram plays videos inline; the codec setting defaults to "Auto (H.264 first)" and VP9 or AV1 can still be chosen. Katze's size-capped format ladder stays. `PREFERRED_AUDIO_LANG` replaces the fixed Russian audio preference.
 - **Settings.** Button data is matched exactly and a setting is saved for the user who pressed the button, not for the chat.
 - **State.** SQLite under `DATA_DIR` with WAL and a 30 s busy timeout; the Telegram session file sits next to it. `src/database/migrate.py` holds a check-and-`ALTER` helper for columns added later. The bot refuses to start when `TMPFILE_PATH` and `DATA_DIR` overlap. No MySQL driver.
+- **Cookies and Instagram.** One cookies file per site in `COOKIES_DIR` instead of a YouTube-only `youtube-cookies.txt` in the working directory; yt-dlp gets an in-memory copy, so the mounted file is never written. `BROWSERS` (cookies from a browser) is gone. Instagram goes through yt-dlp; the `/spdl` Instagram engine and its call to an external service are removed.
 - **Logs and errors.** One log formatter redacts the bot token, credentials in URLs and cookie values, tracebacks included. yt-dlp runs without verbose output and logs through it. Users never see exception text, only "Something went wrong with this download."
 - **Build.** uv with a lock file instead of PDM, Python 3.12, kurigram 2.2.27, yt-dlp with curl-cffi for browser impersonation. Alpine image pinned by digest, non-root user, caches and scratch under `/tmp` so the root filesystem can be read-only, `runtime` and `test` targets, and `python main.py --self-check`.
 - **Repository.** Donation and payment material, the upstream public bot links and images, the old workflows and Dependabot file, and the Redis and MySQL compose services are gone. A unit test suite lives in `tests/`.

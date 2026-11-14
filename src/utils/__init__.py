@@ -2,14 +2,13 @@
 # coding: utf-8
 
 # ytdlbot - __init__.py.py
-# Modified 2026 by megabitus98 (fork): extract_first_url for links with text around them
+# Modified 2026 by megabitus98 (fork): extract_first_url for links with text around them; is_youtube removed (engine/sites.py picks the site)
 
 
 import functools
 import re
 import threading
 import time
-from urllib.parse import urlparse
 
 
 def sizeof_fmt(num: int, suffix="B"):
@@ -28,18 +27,6 @@ def timeof_fmt(seconds: int | float):
             period_value, seconds = divmod(seconds, period_seconds)
             result += f"{int(period_value)}{period_name}"
     return result
-
-
-def is_youtube(url: str) -> bool:
-    try:
-        if not url or not isinstance(url, str):
-            return False
-
-        parsed = urlparse(url)
-        return parsed.netloc.lower() in {"youtube.com", "www.youtube.com", "youtu.be"}
-
-    except Exception:
-        return False
 
 
 def extract_first_url(text: str | None) -> str | None:

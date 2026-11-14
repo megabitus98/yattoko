@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - __init__.py.py
+# Modified 2026 by megabitus98 (fork): Instagram removed from /spdl (it goes through yt-dlp)
 
 from urllib.parse import urlparse
 from typing import Any, Callable
@@ -9,7 +10,6 @@ from typing import Any, Callable
 from engine.generic import YoutubeDownload
 from engine.direct import DirectDownload
 from engine.pixeldrain import pixeldrain_download
-from engine.instagram import InstagramDownload
 from engine.krakenfiles import krakenfiles_download
 
 
@@ -23,16 +23,9 @@ def direct_entrance(client, bot_message, url):
     dl.start()
 
 
-# --- Handler for the Instagram class, to make the interface consistent ---
-def instagram_handler(client: Any, bot_message: Any, url: str) -> None:
-    """A wrapper to handle the InstagramDownload class."""
-    downloader = InstagramDownload(client, bot_message, url)
-    downloader.start()
-
 DOWNLOADER_MAP: dict[str, Callable[[Any, Any, str], Any]] = {
     "pixeldrain.com": pixeldrain_download,
     "krakenfiles.com": krakenfiles_download,
-    "instagram.com": instagram_handler,
 }
 
 def special_download_entrance(client: Any, bot_message: Any, url: str) -> Any:

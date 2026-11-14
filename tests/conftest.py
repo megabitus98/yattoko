@@ -20,6 +20,7 @@ os.environ.update(
         "DATA_DIR": os.path.join(_test_root, "data"),
         "TMPFILE_PATH": os.path.join(_test_root, "tmp"),
         "DB_DSN": "sqlite:///" + os.path.join(_test_root, "data", "ytdlbot.db"),
+        "COOKIES_DIR": os.path.join(_test_root, "cookies"),
         # Blank means "use the code default" and keeps a local .env from switching features on.
         **dict.fromkeys(
             [
