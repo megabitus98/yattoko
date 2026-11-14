@@ -2,13 +2,15 @@
 # coding: utf-8
 
 # ytdlbot - __init__.py.py
-# Modified 2026 by megabitus98 (fork): extract_first_url for links with text around them; is_youtube removed (engine/sites.py picks the site)
+# Modified 2026 by megabitus98 (fork): extract_first_url for links with text around them; is_youtube removed (engine/sites.py picks the site); dir_size for the scratch budget
 
 
 import functools
+import os
 import re
 import threading
 import time
+from pathlib import Path
 
 
 def sizeof_fmt(num: int, suffix="B"):
@@ -17,6 +19,19 @@ def sizeof_fmt(num: int, suffix="B"):
             return "%3.1f%s%s" % (num, unit, suffix)
         num /= 1024.0
     return "%.1f%s%s" % (num, "Yi", suffix)
+
+
+def dir_size(path: Path) -> int:
+    # Bytes of every file under path. Other jobs create and delete files meanwhile, so a file that is
+    # gone by the time it is measured counts as 0 instead of failing this job.
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
 
 
 def timeof_fmt(seconds: int | float):

@@ -43,7 +43,11 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `DB_DSN` | `sqlite:///<DATA_DIR>/ytdlbot.db` | SQLAlchemy database URL |
 | `TMPFILE_PATH` | `/tmp/ytdlbot` | Scratch directory for downloads. Emptied at startup, so it must not overlap `DATA_DIR` |
 | `REDIS_HOST` | unset | Redis host for the cache of already-sent files. Unset or unreachable: an in-process cache that a restart clears |
-| `TG_NORMAL_MAX_SIZE` | `2000` | Largest download in MiB; a bigger download stops |
+| `TG_NORMAL_MAX_SIZE` | `2000` | Largest file in MiB. A download that grows past it stops; a finished file over it is downloaded once more one quality lower, then refused |
+| `MAX_PARALLEL_JOBS` | `2` | Downloads running at once. The others wait and their users see "Queued, position N." |
+| `TMP_BUDGET` | `MAX_PARALLEL_JOBS` × 4500 MiB | Bytes all downloads together may keep under `TMPFILE_PATH`; a download stops when they go over. Set it to the scratch volume's size minus a margin |
+| `JOB_TIMEOUT` | `2700` | Seconds one download may take |
+| `OWN_PUBLIC_IPS` | empty | Comma-separated static public IPs of your own network. Links that resolve to them are refused |
 | `AUDIO_FORMAT` | `m4a` | Audio format preferred when a user sends as audio |
 | `PREFERRED_AUDIO_LANG` | empty | Audio language to prefer, e.g. `en`. Empty: the original track |
 | `YT_DLP_PROXY` | empty | Proxy for yt-dlp, e.g. `http://proxy.example:8080`. Empty: direct connection |
@@ -66,6 +70,8 @@ Cookies are per site: `COOKIES_DIR/instagram.txt`, `youtube.txt`, `tiktok.txt`, 
 3. `docker compose run --rm ytdlbot python main.py --self-check` checks the image without contacting Telegram: it prints the yt-dlp, curl-cffi and kurigram versions and whether impersonation works and `/data` and `/tmp` are writable, and exits non-zero if something is wrong.
 4. `docker compose up -d` starts the bot; `docker compose logs -f` follows the log.
 
+While the bot runs, a heartbeat asks Telegram for the bot's own account every 60 s and touches `/tmp/healthy` when it answers. `python health.py` (in `/app`) exits 0 while that file is younger than 180 s and 1 otherwise; use it as the liveness and startup probe.
+
 The container runs as a non-root user with a read-only root filesystem. The database and the session file live in the `ytdlbot-data` volume (`/data`); downloads go to the `ytdlbot-tmp` volume (`/tmp`). One SQLite file, no Redis or other database service.
 
 ## Development
@@ -87,6 +93,9 @@ This list is written from the code at this fork's head, compared with Katze-942/
 - **Settings.** Button data is matched exactly and a setting is saved for the user who pressed the button, not for the chat.
 - **State.** SQLite under `DATA_DIR` with WAL and a 30 s busy timeout; the Telegram session file sits next to it. `src/database/migrate.py` holds a check-and-`ALTER` helper for columns added later. The bot refuses to start when `TMPFILE_PATH` and `DATA_DIR` overlap. No MySQL driver.
 - **Cookies and Instagram.** One cookies file per site in `COOKIES_DIR` instead of a YouTube-only `youtube-cookies.txt` in the working directory; yt-dlp gets an in-memory copy, so the mounted file is never written. `BROWSERS` (cookies from a browser) is gone. Instagram goes through yt-dlp; the `/spdl` Instagram engine and its call to an external service are removed.
+- **Downloads in a queue.** Handlers hand each download to a pool of `MAX_PARALLEL_JOBS` (default 2) and return at once; waiting users see their place in the queue. A download stops when it grows past `TG_NORMAL_MAX_SIZE` (even when the size is not known in advance), when all downloads together go over `TMP_BUDGET`, or after `JOB_TIMEOUT`. A finished file over the limit is downloaded once more one quality lower before the bot says it is too large; the old "try /direct" text is gone.
+- **Host check.** Before any download the link must be http(s) and its host must resolve to public IPv4 addresses only, none of them in `OWN_PUBLIC_IPS`; otherwise the user gets "This video is private, deleted or not available here." It is defence in depth: redirects and addresses inside pages get past it, so an egress network policy is still needed.
+- **Cache and health.** One in-process file cache shared by every job, with SponsorBlock in the key. A heartbeat file for container probes (`python health.py`).
 - **Logs and errors.** One log formatter redacts the bot token, credentials in URLs and cookie values, tracebacks included. yt-dlp runs without verbose output and logs through it. Users never see exception text, only "Something went wrong with this download."
 - **Build.** uv with a lock file instead of PDM, Python 3.12, kurigram 2.2.27, yt-dlp with curl-cffi for browser impersonation. Alpine image pinned by digest, non-root user, caches and scratch under `/tmp` so the root filesystem can be read-only, `runtime` and `test` targets, and `python main.py --self-check`.
 - **Repository.** Donation and payment material, the upstream public bot links and images, the old workflows and Dependabot file, and the Redis and MySQL compose services are gone. A unit test suite lives in `tests/`.

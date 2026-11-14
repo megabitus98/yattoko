@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -33,6 +33,10 @@ class BotText:
     unavailable = "This video is private, deleted or not available here."
 
     refused = "Send a link to a single video, not a playlist, channel or live stream."
+
+    too_large = "This video is too large for Telegram (over 2 GB)."
+
+    queued = "Queued, position {n}."
 
     bad_link = "Check the link and send it again."
 

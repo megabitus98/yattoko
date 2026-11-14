@@ -2,14 +2,16 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock
 
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import tempfile
+import time
 import uuid
 import subprocess
 
@@ -24,15 +26,28 @@ import filetype
 from pyrogram import enums, errors, types
 from tqdm import tqdm
 
-from config import TG_NORMAL_MAX_SIZE, TMPFILE_PATH, BotText, Types
-from database import Redis
+from config import (
+    JOB_TIMEOUT,
+    OWN_PUBLIC_IPS,
+    TG_NORMAL_MAX_SIZE,
+    TMP_BUDGET,
+    TMPFILE_PATH,
+    BotText,
+    Types,
+)
+from database import get_cache
 from database.model import (
     get_format_settings,
     get_quality_settings,
+    get_sponsorblock_settings,
     get_vcodec_settings,
 )
 from engine.errors import RefusedContent, classify, site_name, user_message
-from utils import debounce, sizeof_fmt
+from engine.jobs import JobTimeout, TooLarge
+from utils import debounce, dir_size, netcheck
+
+# highest first, as in /settings; an oversized file is downloaded once more one step lower
+QUALITIES = ("1440p", "1080p", "720p", "480p", "240p")
 
 
 def generate_input_media(file_paths: list, cap: str) -> list:
@@ -54,6 +69,10 @@ def generate_input_media(file_paths: list, cap: str) -> list:
 
 class BaseDownloader(ABC):
     def __init__(self, client: Types.Client, bot_msg: Types.Message, url: str):
+        # first, so a refused link creates nothing (reply: BotText.unavailable)
+        netcheck.check_url(url, OWN_PUBLIC_IPS)
+        # the downloader is built when the job starts, so this is the job's own clock
+        self._deadline = time.monotonic() + JOB_TIMEOUT
         self._client = client
         self._url = url
         # chat id is the same for private chat
@@ -65,14 +84,13 @@ class BaseDownloader(ABC):
         os.makedirs(TMPFILE_PATH, exist_ok=True)
         self._tempdir = tempfile.TemporaryDirectory(prefix="ytdl-", dir=TMPFILE_PATH)
         self._bot_msg: Types.Message = bot_msg
-        self._redis = Redis()
         # settings are saved per user (main.save_setting); in a group the chat ID is the group's
         self._quality = get_quality_settings(self._from_user)
         self._vcodec = get_vcodec_settings(self._from_user)
         self._format = get_format_settings(self._from_user)
-
-    def __del__(self):
-        self._tempdir.cleanup()
+        self._sponsorblock = get_sponsorblock_settings(self._from_user)
+        # fixed before any retry a quality lower, so the file is cached under what the user asked for
+        self._video_key = self._calc_video_key()
 
     @staticmethod
     def __remove_bash_color(text):
@@ -111,14 +129,20 @@ class BaseDownloader(ABC):
         f.close()
         return text
 
+    def check_limits(self, downloaded: int, total: int = 0) -> None:
+        # The total can be unknown or an estimate, so the bytes so far count too. The scratch volume is
+        # shared by all jobs: one runaway download must not fill it and get the pod evicted.
+        # dir_size walks TMPFILE_PATH on every progress update; a few files per job keep that cheap.
+        if max(downloaded, total) > TG_NORMAL_MAX_SIZE or dir_size(Path(TMPFILE_PATH)) > TMP_BUDGET:
+            raise TooLarge()
+        if time.monotonic() > self._deadline:
+            raise JobTimeout()
+
     def download_hook(self, d: dict):
         if d["status"] == "downloading":
             downloaded = d.get("downloaded_bytes", 0)
             total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-
-            if total > TG_NORMAL_MAX_SIZE:
-                msg = f"Your download file size {sizeof_fmt(total)} is too large for Telegram."
-                raise Exception(msg)
+            self.check_limits(downloaded, total)
 
             # percent = remove_bash_color(d.get("_percent_str", "N/A"))
             speed = self.__remove_bash_color(d.get("_speed_str", "N/A"))
@@ -284,26 +308,42 @@ class BaseDownloader(ABC):
             logging.error("Unknown upload format settings for %s", self._format)
             return
 
-        video_key = self._calc_video_key()
         obj = success.document or success.video or success.audio or success.animation or success.photo
         mapping = {
             "file_id": json.dumps([getattr(obj, "file_id", None)]),
             "meta": json.dumps({k: v for k, v in meta.items() if k != "thumb"}, ensure_ascii=False),
         }
 
-        self._redis.add_cache(video_key, mapping)
+        get_cache().hset(self._video_key, mapping=mapping)
         # change progress bar to done
         self._bot_msg.edit_text(BotText.done)
         return success
 
     def _get_video_cache(self):
-        return self._redis.get_cache(self._calc_video_key())
+        return get_cache().hgetall(self._video_key)
 
     def _calc_video_key(self):
-        h = hashlib.md5()
-        h.update((self._url + self._quality + self._format + self._vcodec).encode())
-        key = h.hexdigest()
-        return key
+        # every setting that changes the file that is sent
+        settings = (self._url, self._quality, self._format, self._vcodec, self._sponsorblock)
+        return hashlib.md5("\n".join(settings).encode()).hexdigest()
+
+    def _fits(self, files) -> bool:
+        return all(os.path.getsize(f) <= TG_NORMAL_MAX_SIZE for f in files)
+
+    def _download_fitting(self) -> list:
+        # Checked after merge and post-processing, before the upload: Telegram refuses bigger files.
+        # One retry a quality lower, then refuse. A limit hit in download_hook gets no retry.
+        files = self._download(self._setup_formats())
+        if not self._fits(files) and self._quality in QUALITIES[:-1]:
+            logging.info("%s is over the size limit at %s, trying once lower", self._url, self._quality)
+            # empty: yt-dlp would take a file that is already there as downloaded
+            shutil.rmtree(self._tempdir.name)
+            os.makedirs(self._tempdir.name)
+            self._quality = QUALITIES[QUALITIES.index(self._quality) + 1]
+            files = self._download(self._setup_formats())
+        if not self._fits(files):
+            raise TooLarge()
+        return files
 
     @final
     def start(self):
@@ -316,10 +356,13 @@ class BaseDownloader(ABC):
             else:
                 self._start()
         except errors.Flood:
-            raise  # the handler tells the user to wait
+            raise  # the job in main.submit_download() tells the user to wait
         except RefusedContent:
             logging.info("Refused %s: not a single video", self._url)
             self._bot_msg.edit_text(BotText.refused)
+        except TooLarge:
+            logging.info("Refused %s: over the size limit or the scratch budget", self._url)
+            self._bot_msg.edit_text(BotText.too_large)
         except Exception as e:
             # one reply: the progress message becomes the error text; the traceback only goes to the log
             logging.exception("Download failed for %s", self._url)

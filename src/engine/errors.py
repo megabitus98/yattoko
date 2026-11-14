@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - errors.py
-# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other, RefusedContent for playlists and live streams
+# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other, RefusedContent for playlists and live streams, links refused by the host check are unavailable
 
 import re
 from typing import Literal
@@ -12,6 +12,7 @@ from yt_dlp.networking.exceptions import HTTPError, ProxyError
 from yt_dlp.utils import GeoRestrictedError
 
 from config import BotText
+from utils.netcheck import BlockedHost
 
 Kind = Literal["login_required", "blocked", "unavailable", "other"]
 
@@ -81,7 +82,7 @@ def _chain(err: BaseException):
 def classify(err: BaseException) -> Kind:
     chain = list(_chain(err))
     for e in chain:
-        if isinstance(e, GeoRestrictedError):
+        if isinstance(e, (GeoRestrictedError, BlockedHost)):
             return "unavailable"
         if isinstance(e, ProxyError) or (
             isinstance(e, HTTPError) and e.status in (403, 429)

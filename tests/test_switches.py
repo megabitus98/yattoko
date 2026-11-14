@@ -54,3 +54,14 @@ def test_ytdl_ignored_when_groups_off(downloads):
     main.ytdl_handler(FakeClient(), message)
     assert replies == []
     assert downloads == []
+
+
+def test_stats_uptime_from_create_app(downloads, monkeypatch):
+    # the start time is set by create_app(), not by a name that exists only under __main__
+    monkeypatch.setattr(main, "ENABLE_STATS", True)
+    before = main.started_at
+    main.create_app()
+    assert main.started_at >= before
+    message, replies = fake_message("/stats", user_id=1)
+    main.stats_handler(FakeClient(), message)
+    assert len(replies) == 1 and "Bot Uptime" in replies[0]

@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - direct.py
-# Modified 2026 by megabitus98 (fork): no exception text to users, English texts from config.constant, aria2 failures raise to BaseDownloader.start() instead of replying here
+# Modified 2026 by megabitus98 (fork): no exception text to users, English texts from config.constant, aria2 failures raise to BaseDownloader.start() instead of replying here, size, scratch budget and time limits on the requests path too
 
 import logging
 import re
@@ -25,12 +25,17 @@ class DirectDownload(BaseDownloader):
 
     def _requests_download(self):
         logging.info("Requests download with url %s", self._url)
-        response = requests.get(self._url, stream=True)
+        # a stalled server fails instead of holding the job forever (the time limit is checked per chunk)
+        response = requests.get(self._url, stream=True, timeout=60)
         response.raise_for_status()
         file = Path(self._tempdir.name).joinpath(uuid4().hex)
+        downloaded = 0
         with open(file, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
+            # 1 MiB chunks: the limits check walks TMPFILE_PATH each time
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
                 f.write(chunk)
+                downloaded += len(chunk)
+                self.check_limits(downloaded)
         ext = filetype.guess_extension(file)
         if ext is not None:
             new_name = file.with_suffix(f".{ext}")

@@ -7,10 +7,9 @@ from pyrogram import enums
 import main
 from config import BotText
 from database.model import init_user, set_user_settings
-from engine import base
-from engine.generic import RefusedContent, YoutubeDownload, attempt, single_video_only
+from engine.generic import RefusedContent, attempt, single_video_only
 from engine.proxy import ydl_proxy
-from fakes import FakeClient, fake_message
+from fakes import FakeClient, fake_downloader, fake_message
 
 VIDEO = {"id": "x", "title": "x"}
 
@@ -47,27 +46,6 @@ def fake_ydl(monkeypatch):
 
 def calls(state, name):
     return [c for i in state.instances for c in i.calls if c[0] == name]
-
-
-def make_downloader(
-    monkeypatch, url, user_id=2, chat_id=None, chat_type=enums.ChatType.PRIVATE
-):
-    # the bot's progress message: in a group it replies to the requester's message
-    monkeypatch.setattr(
-        base,
-        "Redis",
-        lambda: SimpleNamespace(get_cache=lambda key: {}, add_cache=lambda *a: None),
-    )
-    edits = []
-    bot_msg = SimpleNamespace(
-        id=10,
-        chat=SimpleNamespace(
-            id=user_id if chat_id is None else chat_id, type=chat_type
-        ),
-        reply_to_message=SimpleNamespace(from_user=SimpleNamespace(id=user_id)),
-        edit_text=lambda text, **kwargs: edits.append(text),
-    )
-    return YoutubeDownload(FakeClient(), bot_msg, url), edits
 
 
 @pytest.mark.parametrize("kind", ["playlist", "multi_video"])
@@ -149,12 +127,12 @@ def test_list_in_url_not_refused(fake_ydl, tmp_path, downloads):
     assert calls(fake_ydl, "process_ie_result") == [("process_ie_result", VIDEO, True)]
 
 
-def test_gdrive_source_first(fake_ydl, monkeypatch):
+def test_gdrive_source_first(fake_ydl):
     for url, source in [
         ("https://drive.google.com/file/d/abc/view", True),
         ("https://www.youtube.com/watch?v=x", False),
     ]:
-        downloader, _ = make_downloader(monkeypatch, url)
+        downloader, _ = fake_downloader(url)
         fake_ydl.results = [VIDEO]
         downloader._download(downloader._setup_formats())
         params = fake_ydl.instances[-1].params
@@ -168,8 +146,8 @@ def test_proxy_exit():
     assert ydl_proxy("socks5://proxy.example:1080") == "socks5://proxy.example:1080"
 
 
-def test_refused_reply(fake_ydl, monkeypatch):
-    downloader, edits = make_downloader(monkeypatch, "https://www.youtube.com/@channel")
+def test_refused_reply(fake_ydl):
+    downloader, edits = fake_downloader("https://www.youtube.com/@channel")
     fake_ydl.results = [{"_type": "playlist", "entries": []}]
     downloader.start()
     assert edits == [BotText.refused]
@@ -179,14 +157,13 @@ def test_refused_reply(fake_ydl, monkeypatch):
     )
 
 
-def test_settings_read_by_requesting_user(fake_ydl, monkeypatch):
+def test_settings_read_by_requesting_user(fake_ydl):
     # in a group the chat ID is the group's; the settings belong to the person who sent the link
     init_user(777)
     set_user_settings(777, "format", "audio")
     set_user_settings(777, "quality", "720p")
     set_user_settings(777, "sponsorblock", "remove")
-    downloader, _ = make_downloader(
-        monkeypatch,
+    downloader, _ = fake_downloader(
         "https://www.youtube.com/watch?v=x",
         user_id=777,
         chat_id=-100123,

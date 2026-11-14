@@ -4,10 +4,11 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS
 
 __author__ = "Benny <benny.think@gmail.com>"
 
+import ipaddress
 import os
 
 
@@ -34,6 +35,19 @@ def parse_id_list(raw: str | None, name: str) -> frozenset[int]:
                 f"{name} must be a comma-separated list of numeric Telegram IDs, got {item!r}"
             ) from None
     return frozenset(ids)
+
+
+def parse_ip_list(raw: str | None, name: str) -> frozenset[str]:
+    # normalised by ipaddress, so the strings compare equal to what the host check resolves
+    ips = set()
+    for item in (raw or "").split(","):
+        if item := item.strip():
+            try:
+                ips.add(str(ipaddress.ip_address(item)))
+            except ValueError:
+                # no value in the message: the list is a secret
+                raise ConfigError(f"{name} must be a comma-separated list of IP addresses") from None
+    return frozenset(ips)
 
 
 def parse_bool(raw: str | None, default: bool) -> bool:
@@ -108,4 +122,17 @@ M3U8_SUPPORT = _bool_env("M3U8_SUPPORT")
 
 # Telegram upload limit, set in MiB
 TG_NORMAL_MAX_SIZE: int = _int_env("TG_NORMAL_MAX_SIZE", 2000) * 1024 * 1024
+
+# downloads running at once; the rest wait in the queue
+MAX_PARALLEL_JOBS: int = _int_env("MAX_PARALLEL_JOBS", 2)
+if MAX_PARALLEL_JOBS < 1:
+    raise ConfigError("MAX_PARALLEL_JOBS must be at least 1")
+# bytes all jobs together may keep under TMPFILE_PATH: the scratch volume's size minus a margin
+# (estimate: separate streams, merged file and post-processor copies, about 4.5 GB per job)
+TMP_BUDGET: int = _int_env("TMP_BUDGET", MAX_PARALLEL_JOBS * 4500 * 1024 * 1024)
+# seconds one job may take
+JOB_TIMEOUT: int = _int_env("JOB_TIMEOUT", 2700)
+# the home's own static public IPs; links that resolve to them are refused
+OWN_PUBLIC_IPS = parse_ip_list(os.getenv("OWN_PUBLIC_IPS"), "OWN_PUBLIC_IPS")
+
 CAPTION_URL_LENGTH_LIMIT = 150

@@ -78,7 +78,7 @@ def test_upload_tries_methods_in_order():
     dl = object.__new__(Fake)  # skip __init__: no Telegram message, no temp dir
     dl._tempdir = SimpleNamespace(cleanup=lambda: None)
     dl._format, dl._chat_id, dl._url, dl._quality, dl._vcodec = "video", 1, "u", "q", "v"
-    dl._redis = SimpleNamespace(add_cache=lambda key, mapping: None)
+    dl._video_key = "test-upload-order"  # the file_id goes into the shared in-process cache
     dl._bot_msg = SimpleNamespace(edit_text=lambda text: None)
     calls = []
 

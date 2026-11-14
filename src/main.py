@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction)
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app()
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -33,9 +33,10 @@ if __name__ == "__main__" and "--self-check" in sys.argv[1:]:
 import psutil
 import pyrogram.errors
 import yt_dlp
-from pyrogram import Client, enums, filters, types
+from pyrogram import Client, enums, filters, idle, types
 from pyrogram.filters import Filter
 from pyrogram.handlers import CallbackQueryHandler, MessageHandler
+from pyrogram.utils import loops
 
 from config import (
     APP_HASH,
@@ -48,6 +49,7 @@ from config import (
     ENABLE_SPDL,
     ENABLE_STATS,
     M3U8_SUPPORT,
+    MAX_PARALLEL_JOBS,
     OWNERS,
     TMPFILE_PATH,
     WORKERS,
@@ -63,9 +65,17 @@ from database.model import (
     set_user_settings,
 )
 from engine import direct_entrance, youtube_entrance, special_download_entrance
+from engine.base import QUALITIES
 from engine.errors import classify, site_name, user_message
+from engine.jobs import JobQueue
+from health import HEALTH_FILE, start_heartbeat
 from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
 from utils.access import GUARDS
+
+# Every download runs here; handlers hand the job over and return, so queued jobs hold no kurigram worker.
+JOBS = JobQueue(MAX_PARALLEL_JOBS)
+# for the /stats uptime; create_app() sets it again
+started_at = time.time()
 
 def search_ytb(kw: str, num_results: int = 10) -> str:
     # Single flat search query — no per-result extract_info (avoids N+1 latency)
@@ -168,7 +178,7 @@ def stats_handler(client: Client, message: types.Message):
         disk_free=sizeof_fmt(free),
         physical_cores=psutil.cpu_count(logical=False),
         total_cores=psutil.cpu_count(logical=True),
-        bot_uptime=timeof_fmt(time.time() - botStartTime),
+        bot_uptime=timeof_fmt(time.time() - started_at),
         os_uptime=timeof_fmt(time.time() - boot_time),
     )
 
@@ -226,12 +236,7 @@ def direct_download(client: Client, message: types.Message):
     if url is None or not re.findall(r"^https?://", url.lower()):
         message.reply_text(BotText.bad_link)
         return
-    bot_msg = message.reply_text(BotText.received)
-    try:
-        direct_entrance(client, bot_msg, url)
-    except Exception as e:
-        reply_error(message, url, e)
-        bot_msg.delete()
+    submit_download(client, message, url, direct_entrance)
 
 
 def spdl_handler(client: Client, message: types.Message):
@@ -247,12 +252,7 @@ def spdl_handler(client: Client, message: types.Message):
     if url is None or not re.findall(r"^https?://", url.lower()):
         message.reply_text(BotText.bad_link)
         return
-    bot_msg = message.reply_text(BotText.received)
-    try:
-        special_download_entrance(client, bot_msg, url)
-    except Exception as e:
-        reply_error(message, url, e)
-        bot_msg.delete()
+    submit_download(client, message, url, special_download_entrance)
 
 
 def ytdl_handler(client: Client, message: types.Message):
@@ -270,13 +270,42 @@ def ytdl_handler(client: Client, message: types.Message):
     if m3u8_blocked(url):
         message.reply_text(BotText.disabled)
         return
+    submit_download(client, message, url, youtube_entrance)
 
-    bot_msg = message.reply_text(BotText.received)
-    try:
-        youtube_entrance(client, bot_msg, url)
-    except Exception as e:
-        reply_error(message, url, e)
-        bot_msg.delete()
+
+def submit_download(
+    client: Client,
+    message: types.Message,
+    url: str,
+    entrance: Callable[[Client, Any, str], Any],
+    first_text: str = BotText.received,
+) -> None:
+    # The progress message is sent now; the download runs in JOBS. Errors are replied from inside the job,
+    # since the handler has returned by then.
+    bot_msg = message.reply_text(first_text)
+
+    def job():
+        try:
+            entrance(client, bot_msg, url)
+        except pyrogram.errors.Flood as e:
+            flood_wait(client, message, e)
+        except Exception as e:
+            reply_error(message, url, e)
+            bot_msg.delete()
+
+    if position := JOBS.submit(job):
+        bot_msg.edit_text(BotText.queued.format(n=position))
+
+
+def flood_wait(client: Client, message: types.Message, e: pyrogram.errors.Flood) -> None:
+    f = BytesIO()
+    f.write(BotText.flood_file.encode())
+    f.name = BotText.flood_file_name
+    message.reply_document(f, caption=BotText.flood_wait.format(e.value))
+    f.close()
+    for owner_id in OWNERS:
+        client.send_message(owner_id, BotText.flood_wait.format(e.value))
+    time.sleep(e.value)
 
 
 def reply_error(message: types.Message, url: str | None, err: BaseException) -> None:
@@ -317,18 +346,10 @@ def download_handler(client: Client, message: types.Message):
             )
             return
 
-        bot_msg: types.Message | Any = message.reply_text(BotText.downloading)
+        submit_download(client, message, url, youtube_entrance, BotText.downloading)
         client.send_chat_action(chat_id, enums.ChatAction.UPLOAD_VIDEO)
-        youtube_entrance(client, bot_msg, url)
     except pyrogram.errors.Flood as e:
-        f = BytesIO()
-        f.write(BotText.flood_file.encode())
-        f.name = BotText.flood_file_name
-        message.reply_document(f, caption=BotText.flood_wait.format(e.value))
-        f.close()
-        for owner_id in OWNERS:
-            client.send_message(owner_id, BotText.flood_wait.format(e.value))
-        time.sleep(e.value)
+        flood_wait(client, message, e)
     except Exception as e:
         reply_error(message, url, e)
 
@@ -336,7 +357,7 @@ def download_handler(client: Client, message: types.Message):
 # Callback data -> stored setting value. The handler regexes are built from these keys and anchored,
 # so only exact button data matches; anything else never reaches the database.
 FORMAT_CHOICES = {"document": "document", "video": "video", "audio": "audio"}
-QUALITY_CHOICES = {q: q for q in ("1440p", "1080p", "720p", "480p", "240p")}
+QUALITY_CHOICES = {q: q for q in QUALITIES}
 VCODEC_CHOICES = {v: v for v in ("vcodec-auto", "vcodec-vp9", "vcodec-avc1", "vcodec-av01")}
 SPONSORBLOCK_CHOICES = {"sponsorblock-disabled": "disabled", "sponsorblock-remove": "remove"}
 
@@ -401,11 +422,21 @@ def handler_table() -> list[HandlerSpec]:
 
 
 def create_app() -> Client:
+    global started_at
+    started_at = time.time()
     # the session file lives on the data volume next to the database, not in the image
     app = Client("main", APP_ID, APP_HASH, bot_token=BOT_TOKEN, workers=WORKERS, workdir=DATA_DIR)
     for handler_cls, callback, handler_filters, group in handler_table():
         app.add_handler(handler_cls(callback, handler_filters), group)
     return app
+
+
+async def serve(app: Client) -> None:
+    # Client.run(), with the heartbeat started once the client is up: get_me needs a started client
+    await app.start()
+    start_heartbeat(app)
+    await idle()
+    await app.stop()
 
 
 if __name__ == "__main__":
@@ -423,8 +454,9 @@ if __name__ == "__main__":
                 logging.error(f"Failed to remove {item_path}: {e}")
     os.makedirs(TMPFILE_PATH, exist_ok=True)
     logging.info(f"Temp directory set to {TMPFILE_PATH}")
+    # a container restart keeps /tmp; the probe must wait for this run's first heartbeat
+    HEALTH_FILE.unlink(missing_ok=True)
 
-    botStartTime = time.time()
     banner = """
 ▌ ▌         ▀▛▘     ▌       ▛▀▖              ▜            ▌
 ▝▞  ▞▀▖ ▌ ▌  ▌  ▌ ▌ ▛▀▖ ▞▀▖ ▌ ▌ ▞▀▖ ▌  ▌ ▛▀▖ ▐  ▞▀▖ ▝▀▖ ▞▀▌
@@ -434,4 +466,6 @@ if __name__ == "__main__":
 By @BennyThink
     """
     print(banner)
-    create_app().run()
+    # same event loop as Client.run() (uvloop with kurigram[fast])
+    loops.run(serve(create_app()))
+    JOBS.shutdown(wait=False)

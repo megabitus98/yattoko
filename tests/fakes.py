@@ -43,3 +43,19 @@ def fake_callback(data, user_id=2, chat_id=None):
         stop_propagation=stop_propagation,
     )
     return query, answers
+
+
+def fake_downloader(url, user_id=2, chat_id=None, chat_type=enums.ChatType.PRIVATE):
+    # A YoutubeDownload whose progress message records its edits; in a group it replies to the requester's message.
+    from engine.generic import YoutubeDownload
+
+    edits = []
+    bot_msg = SimpleNamespace(
+        id=10,
+        chat=SimpleNamespace(
+            id=user_id if chat_id is None else chat_id, type=chat_type
+        ),
+        reply_to_message=SimpleNamespace(from_user=SimpleNamespace(id=user_id)),
+        edit_text=lambda text, **kwargs: edits.append(text),
+    )
+    return YoutubeDownload(FakeClient(), bot_msg, url), edits

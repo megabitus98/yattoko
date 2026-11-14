@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower
 
 import logging
 import os
@@ -15,16 +15,17 @@ from yt_dlp.utils import sanitize_url
 from config import (
     AUDIO_FORMAT,
     COOKIES_DIR,
+    OWN_PUBLIC_IPS,
     PREFERRED_AUDIO_LANG,
     YT_DLP_PROXY,
 )
 
-from database.model import get_sponsorblock_settings
 from engine.base import BaseDownloader
 from engine.cookies import cookie_options
 from engine.errors import RefusedContent
 from engine.proxy import ydl_proxy
 from engine.sites import site_for_url
+from utils import netcheck
 
 # codec setting -> (filter on the first format rungs, codec the sort prefers)
 CODECS = {
@@ -133,6 +134,9 @@ class YoutubeDownload(BaseDownloader):
             "buffersize": 4194304,
             "retries": 6,
             "fragment_retries": 6,
+            # a stalled connection fails instead of waiting for JOB_TIMEOUT (yt-dlp's default is 20 s;
+            # home lines can be slow)
+            "socket_timeout": 60,
             "skip_unavailable_fragments": True,
         }
 
@@ -159,7 +163,7 @@ class YoutubeDownload(BaseDownloader):
                 'key': 'EmbedThumbnail'
             }]
 
-        if get_sponsorblock_settings(self._from_user) == "remove":
+        if self._sponsorblock == "remove":
             sponsorblock_pps = [
                 {
                     'key': 'SponsorBlock',
@@ -183,10 +187,12 @@ class YoutubeDownload(BaseDownloader):
                 }
             }
 
+        # again before the attempt: the name may resolve differently than when the job was queued
+        netcheck.check_url(self._url, OWN_PUBLIC_IPS)
         attempt(self._url, site, YT_DLP_PROXY or "direct", ydl_opts, Path(self._tempdir.name))
         return list(Path(self._tempdir.name).glob("*"))
 
     def _start(self):
         # start download and upload, no cache hit
-        self._download(self._setup_formats())
+        self._download_fitting()
         self._upload()

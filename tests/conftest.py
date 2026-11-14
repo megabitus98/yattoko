@@ -3,8 +3,10 @@
 # load_dotenv() does not override variables that are already set.
 
 import atexit
+import ipaddress
 import os
 import shutil
+import socket
 import tempfile
 
 _test_root = tempfile.mkdtemp(prefix="ytdlbot-tests-")
@@ -32,6 +34,11 @@ os.environ.update(
                 "ENABLE_GROUPS",
                 "M3U8_SUPPORT",
                 "TG_NORMAL_MAX_SIZE",
+                "REDIS_HOST",
+                "MAX_PARALLEL_JOBS",
+                "TMP_BUDGET",
+                "JOB_TIMEOUT",
+                "OWN_PUBLIC_IPS",
             ],
             "",
         ),
@@ -58,3 +65,35 @@ def downloads(monkeypatch):
             main, name, lambda *args, _name=name, **kwargs: calls.append(_name)
         )
     return calls
+
+
+def _offline_resolver(host, port, family=0, type=0, proto=0, flags=0):
+    # numeric IPv4 hosts resolve to themselves, every name to one public address; nothing is looked up
+    try:
+        address = str(ipaddress.IPv4Address(host))
+    except ValueError:
+        address = "142.250.0.1"
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
+
+
+@pytest.fixture(autouse=True)
+def offline_dns(monkeypatch):
+    # The host check runs for every download; its resolver default is bound when check_url is defined,
+    # so patching socket.getaddrinfo would not reach it. Tests that need other answers pass a resolver.
+    from utils import netcheck
+
+    monkeypatch.setattr(netcheck.check_url, "__defaults__", (_offline_resolver,))
+
+
+class InlineJobs:
+    # a submitted job runs before submit() returns, so handler tests can check replies right after the call
+    def submit(self, fn):
+        fn()
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def inline_jobs(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "JOBS", InlineJobs())

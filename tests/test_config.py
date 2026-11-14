@@ -34,3 +34,20 @@ def test_tg_max_size_from_mib(monkeypatch):
     fresh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fresh)
     assert fresh.TG_NORMAL_MAX_SIZE == 10 * 1024 * 1024
+
+
+def test_parse_ip_list():
+    assert cfg.parse_ip_list(" 203.0.113.7, ,198.51.100.1", "X") == frozenset(
+        {"203.0.113.7", "198.51.100.1"}
+    )
+    assert cfg.parse_ip_list(None, "X") == frozenset()
+    with pytest.raises(cfg.ConfigError, match="OWN_PUBLIC_IPS") as excinfo:
+        cfg.parse_ip_list("203.0.113.7,home.example", "OWN_PUBLIC_IPS")
+    assert "home.example" not in str(excinfo.value)  # the list is a secret
+
+
+def test_job_defaults():
+    assert cfg.MAX_PARALLEL_JOBS == 2
+    assert cfg.TMP_BUDGET == 2 * 4500 * 1024 * 1024
+    assert cfg.JOB_TIMEOUT == 2700
+    assert cfg.OWN_PUBLIC_IPS == frozenset()
