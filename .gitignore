@@ -179,3 +179,14 @@ reinforcement/*
 /ytdlbot/main.session-journal
 /src/main.session
 /src/main.session-journal
+
+# fork: state, secrets and cookies never enter git
+*.session
+*.session-journal
+*.sqlite*
+*.db
+*cookies*.txt
+cookies/
+.env.*
+!.env.example
+.pdm-python

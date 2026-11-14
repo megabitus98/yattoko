@@ -1,5 +1,18 @@
 env
 venv
+.venv
 db_data
 .ash_history
 .DS_Store
+.git
+docs
+tests/repo
+**/__pycache__
+**/.pytest_cache
+**/.env*
+**/*.session*
+**/*.sqlite*
+**/*.db
+# ponytail: spec 6.1 says **/*cookies*, narrowed so src/engine/cookies.py and tests/test_cookies.py stay in the image
+**/*cookies*.txt
+**/cookies/

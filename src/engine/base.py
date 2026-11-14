@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises)
 
 import hashlib
 import json
@@ -249,18 +250,13 @@ class BaseDownloader(ABC):
             )
         elif self._format == "video":
             logging.info("Sending as video for %s", self._url)
-            attempt_methods = ["video", "animation", "audio", "photo"]
-            video_meta = meta.copy()
-
-            upload_successful = False  # Flag to track if any method succeeded
-            for method in attempt_methods:
-                current_meta = video_meta.copy()
-
+            # kurigram >= 2.2.26: a failed save_file raises; send_* can also return None (no message back)
+            last_error = None
+            for method in ["video", "animation", "audio", "photo"]:
+                current_meta = meta.copy()
                 if method == "photo":
-                    current_meta.pop("thumb", None)
-                    current_meta.pop("duration", None)
-                    current_meta.pop("height", None)
-                    current_meta.pop("width", None)
+                    for key in ("thumb", "duration", "height", "width"):
+                        current_meta.pop(key, None)
                 elif method == "audio":
                     current_meta.pop("height", None)
                     current_meta.pop("width", None)
@@ -272,14 +268,15 @@ class BaseDownloader(ABC):
                         _type=method,
                         **current_meta,
                     )
-                    upload_successful = True  # Set flag to True on success
-                    break
                 except Exception as e:
-                    logging.error("Retry to send as %s, error: %s", method, e)
-
-            # Check the flag after the loop
-            if not upload_successful:
-                raise ValueError("ERROR: For direct links, try again with `/direct`.")
+                    last_error = e
+                    logging.error("Sending as %s failed: %s", method, e)
+                    continue
+                if success is not None:
+                    break
+                logging.error("Sending as %s returned no message", method)
+            else:
+                raise RuntimeError("Upload failed with every send method") from last_error
 
         else:
             logging.error("Unknown upload format settings for %s", self._format)

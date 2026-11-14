@@ -4,6 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27)
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -12,16 +13,30 @@ import logging
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import typing
+from collections.abc import Callable
 from io import BytesIO
 from typing import Any
+
+if __name__ == "__main__" and "--self-check" in sys.argv[1:]:
+    # ponytail: runs before the app imports below, so it needs no bot config, database or Telegram client
+    import json
+
+    from selfcheck import run_selfcheck
+
+    selfcheck_result = run_selfcheck()
+    print(json.dumps(selfcheck_result))
+    sys.exit(0 if selfcheck_result["ok"] else 1)
 
 import psutil
 import pyrogram.errors
 import yt_dlp
 from pyrogram import Client, enums, filters, types
+from pyrogram.filters import Filter
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 
 from config import (
     APP_HASH,
@@ -75,19 +90,6 @@ def search_ytb(kw: str, num_results: int = 10) -> str:
     return "\n\n".join(lines)
 
 
-def create_app(name: str, workers: int = WORKERS) -> Client:
-    return Client(
-        name,
-        APP_ID,
-        APP_HASH,
-        bot_token=BOT_TOKEN,
-        workers=workers,
-    )
-
-
-app = create_app("main", WORKERS)
-
-
 def private_use(func):
     @functools.wraps(func)
     def wrapper(client: Client, message: types.Message):
@@ -105,7 +107,7 @@ def private_use(func):
             users = []
 
         if users and chat_id and chat_id not in users:
-            message.reply_text(BotText.private, quote=True)
+            message.reply_text(BotText.private)
             return
 
         return func(client, message)
@@ -113,7 +115,6 @@ def private_use(func):
     return wrapper
 
 
-@app.on_message(filters.command(["start"]))
 def start_handler(client: Client, message: types.Message):
     from_id = message.chat.id
     init_user(from_id)
@@ -126,7 +127,6 @@ def start_handler(client: Client, message: types.Message):
     )
 
 
-@app.on_message(filters.command(["help"]))
 def help_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -134,7 +134,6 @@ def help_handler(client: Client, message: types.Message):
     client.send_message(chat_id, BotText.help, disable_web_page_preview=True)
 
 
-@app.on_message(filters.command(["about"]))
 def about_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -142,7 +141,6 @@ def about_handler(client: Client, message: types.Message):
     client.send_message(chat_id, BotText.about)
 
 
-@app.on_message(filters.command(["ping"]))
 def ping_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -156,7 +154,7 @@ def ping_handler(client: Client, message: types.Message):
         ping_time = int(round(end_time - start_time))
         message_sent = True
         if message_sent:
-            message.reply_text(f"Ping: {ping_time:.2f} ms", quote=True)
+            message.reply_text(f"Ping: {ping_time:.2f} ms")
         time.sleep(0.5)
         client.edit_message_text(chat_id=reply.chat.id, message_id=reply.id, text="Понг!")
         time.sleep(1)
@@ -166,7 +164,6 @@ def ping_handler(client: Client, message: types.Message):
     thread.start()
 
 
-@app.on_message(filters.command(["stats"]))
 def stats_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -196,10 +193,9 @@ def stats_handler(client: Client, message: types.Message):
         f"<b>⏲️Время работы системы:</b> {timeof_fmt(time.time() - boot_time)}\n"
     )
 
-    message.reply_text(stats, quote=True)
+    message.reply_text(stats)
 
 
-@app.on_message(filters.command(["settings"]))
 def settings_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -257,7 +253,6 @@ def settings_handler(client: Client, message: types.Message):
     )
 
 
-@app.on_message(filters.command(["direct"]))
 def direct_download(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -266,18 +261,17 @@ def direct_download(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("Direct download using aria2/requests start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Укажи корректную ссылку!", quote=True)
+        message.reply_text("Укажи корректную ссылку!")
         return
-    bot_msg = message.reply_text("Запрос принят, обрабатываю...", quote=True)
+    bot_msg = message.reply_text("Запрос принят, обрабатываю...")
     try:
         direct_entrance(client, bot_msg, url)
     except ValueError as e:
-        message.reply_text(e.__str__(), quote=True)
+        message.reply_text(e.__str__())
         bot_msg.delete()
         return
 
 
-@app.on_message(filters.command(["spdl"]))
 def spdl_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
@@ -286,18 +280,17 @@ def spdl_handler(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("spdl start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Произошла какая-то ошибка, проверьте URL.", quote=True)
+        message.reply_text("Произошла какая-то ошибка, проверьте URL.")
         return
-    bot_msg = message.reply_text("Запрос принят, обрабатываю....", quote=True)
+    bot_msg = message.reply_text("Запрос принят, обрабатываю....")
     try:
         special_download_entrance(client, bot_msg, url)
     except ValueError as e:
-        message.reply_text(e.__str__(), quote=True)
+        message.reply_text(e.__str__())
         bot_msg.delete()
         return
 
 
-@app.on_message(filters.command(["ytdl"]) & filters.group)
 def ytdl_handler(client: Client, message: types.Message):
     # for group only
     init_user(message.from_user.id)
@@ -306,14 +299,14 @@ def ytdl_handler(client: Client, message: types.Message):
     url, new_name = extract_url_and_name(message_text)
     logging.info("ytdl start %s", url)
     if url is None or not re.findall(r"^https?://", url.lower()):
-        message.reply_text("Check your URL.", quote=True)
+        message.reply_text("Check your URL.")
         return
 
-    bot_msg = message.reply_text("Group download request received.", quote=True)
+    bot_msg = message.reply_text("Group download request received.")
     try:
         youtube_entrance(client, bot_msg, url)
     except ValueError as e:
-        message.reply_text(e.__str__(), quote=True)
+        message.reply_text(e.__str__())
         bot_msg.delete()
         return
 
@@ -328,7 +321,6 @@ def check_link(url: str):
         return "m3u8 links are disabled."
 
 
-@app.on_message(filters.incoming & filters.text)
 @private_use
 def download_handler(client: Client, message: types.Message):
     chat_id = message.from_user.id
@@ -340,7 +332,7 @@ def download_handler(client: Client, message: types.Message):
     try:
         # No URL -> treat the text as a YouTube search query
         if not re.findall(r"^https?://", url.lower()):
-            reply = message.reply_text("🔎 Ищу ролики на YouTube...", quote=True)
+            reply = message.reply_text("🔎 Ищу ролики на YouTube...")
             text = search_ytb(url)
             client.edit_message_text(
                 chat_id=reply.chat.id,
@@ -353,7 +345,7 @@ def download_handler(client: Client, message: types.Message):
 
         check_link(url)
         bot_msg: types.Message | Any = message.reply_text(
-            "▶️ Загружаю...\nМогут наблюдаться проблемы с AV1 кодеком.", quote=True
+            "▶️ Загружаю...\nМогут наблюдаться проблемы с AV1 кодеком."
         )
         client.send_chat_action(chat_id, enums.ChatAction.UPLOAD_VIDEO)
         youtube_entrance(client, bot_msg, url)
@@ -362,18 +354,17 @@ def download_handler(client: Client, message: types.Message):
         f.write(str(e).encode())
         f.write(b"Your job will be done soon. Just wait!")
         f.name = "Please wait.txt"
-        message.reply_document(f, caption=f"Пожалуйста, подожди {e} секунд...", quote=True)
+        message.reply_document(f, caption=f"Пожалуйста, подожди {e} секунд...")
         f.close()
         client.send_message(OWNER, f"Пожалуйста, подожди {e} секунд...")
         time.sleep(e.value)
     except ValueError as e:
-        message.reply_text(e.__str__(), quote=True)
+        message.reply_text(e.__str__())
     except Exception as e:
         logging.error("Download failed", exc_info=True)
-        message.reply_text(f"❌ Произошла ошибка!: {e}", quote=True)
+        message.reply_text(f"❌ Произошла ошибка!: {e}")
 
 
-@app.on_callback_query(filters.regex(r"document|video|audio"))
 def format_callback(client: Client, callback_query: types.CallbackQuery):
     chat_id = callback_query.message.chat.id
     data = callback_query.data
@@ -384,7 +375,6 @@ def format_callback(client: Client, callback_query: types.CallbackQuery):
     set_user_settings(chat_id, "format", data)
 
 
-@app.on_callback_query(filters.regex(r"1440p|1080p|720p|480p|240p"))
 def quality_callback(client: Client, callback_query: types.CallbackQuery):
     chat_id = callback_query.message.chat.id
     data = callback_query.data
@@ -393,7 +383,6 @@ def quality_callback(client: Client, callback_query: types.CallbackQuery):
     set_user_settings(chat_id, "quality", data)
 
 
-@app.on_callback_query(filters.regex(r"vcodec-vp9|vcodec-avc1|vcodec-av01|vcodec-auto"))
 def vcodec_callback(client: Client, callback_query: types.CallbackQuery):
     chat_id = callback_query.message.chat.id
     data = callback_query.data
@@ -402,13 +391,43 @@ def vcodec_callback(client: Client, callback_query: types.CallbackQuery):
     set_user_settings(chat_id, "vcodec", data)
 
 
-@app.on_callback_query(filters.regex(r"sponsorblock-disabled|sponsorblock-remove"))
 def sponsorblock_callback(client: Client, callback_query: types.CallbackQuery):
     chat_id = callback_query.message.chat.id
     data = callback_query.data.replace('sponsorblock-', '')
     logging.info("Setting %s sponsorblock to %s", chat_id, data)
     callback_query.answer(f"SponsorBlock: {localize_sponsorblock.get(data, data)}")
     set_user_settings(chat_id, "sponsorblock", data)
+
+
+HandlerSpec = tuple[type, Callable, Filter | None, int]
+
+
+def handler_table() -> list[HandlerSpec]:
+    # Order matters: within a group the first matching handler wins, so the catch-all text handler
+    # must stay after the commands.
+    return [
+        (MessageHandler, start_handler, filters.command(["start"]), 0),
+        (MessageHandler, help_handler, filters.command(["help"]), 0),
+        (MessageHandler, about_handler, filters.command(["about"]), 0),
+        (MessageHandler, ping_handler, filters.command(["ping"]), 0),
+        (MessageHandler, stats_handler, filters.command(["stats"]), 0),
+        (MessageHandler, settings_handler, filters.command(["settings"]), 0),
+        (MessageHandler, direct_download, filters.command(["direct"]), 0),
+        (MessageHandler, spdl_handler, filters.command(["spdl"]), 0),
+        (MessageHandler, ytdl_handler, filters.command(["ytdl"]) & filters.group, 0),
+        (MessageHandler, download_handler, filters.incoming & filters.text, 0),
+        (CallbackQueryHandler, format_callback, filters.regex(r"document|video|audio"), 0),
+        (CallbackQueryHandler, quality_callback, filters.regex(r"1440p|1080p|720p|480p|240p"), 0),
+        (CallbackQueryHandler, vcodec_callback, filters.regex(r"vcodec-vp9|vcodec-avc1|vcodec-av01|vcodec-auto"), 0),
+        (CallbackQueryHandler, sponsorblock_callback, filters.regex(r"sponsorblock-disabled|sponsorblock-remove"), 0),
+    ]
+
+
+def create_app() -> Client:
+    app = Client("main", APP_ID, APP_HASH, bot_token=BOT_TOKEN, workers=WORKERS)
+    for handler_cls, callback, handler_filters, group in handler_table():
+        app.add_handler(handler_cls(callback, handler_filters), group)
+    return app
 
 
 if __name__ == "__main__":
@@ -436,4 +455,4 @@ if __name__ == "__main__":
 By @BennyThink
     """
     print(banner)
-    app.run()
+    create_app().run()
