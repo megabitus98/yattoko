@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:1
-# Modified 2026 by megabitus98 (fork): uv, pinned base, non-root, runtime and test targets
+# Modified 2026 by megabitus98 (fork): uv, pinned base, non-root, runtime and test targets, caches and scratch under /tmp
 
 FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
@@ -31,6 +30,12 @@ COPY pyproject.toml uv.lock /app/
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
     uv sync --locked --no-dev
 COPY src /app
+
+# The root filesystem is read-only at runtime: yt-dlp and deno caches go under HOME, scratch under /tmp.
+ENV HOME=/tmp/home \
+    XDG_CACHE_HOME=/tmp/cache \
+    DENO_DIR=/tmp/cache/deno \
+    TMPFILE_PATH=/tmp/ytdlbot
 
 USER app
 CMD ["python", "main.py"]

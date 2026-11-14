@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # coding: utf-8
-import os
+# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user
+
 from contextlib import contextmanager
 from typing import Literal
 
@@ -11,9 +12,14 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     create_engine,
+    event,
 )
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
+
+from config import DB_DSN
 
 Base = declarative_base()
 
@@ -45,19 +51,24 @@ class Setting(Base):
     user = relationship("User", back_populates="settings")
 
 
-def create_session():
-    engine = create_engine(
-        os.getenv("DB_DSN"),
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=30,
-        pool_recycle=1800,
-    )
-    Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine)
+def make_engine(dsn: str) -> Engine:
+    url = make_url(dsn)
+    if url.get_backend_name() != "sqlite" or url.database in (None, "", ":memory:"):
+        return create_engine(dsn)
+    # timeout: wait up to 30 s for another writer instead of failing with "database is locked"
+    engine = create_engine(dsn, pool_size=5, connect_args={"timeout": 30})
+
+    @event.listens_for(engine, "connect")
+    def _enable_wal(dbapi_connection, _connection_record):
+        dbapi_connection.execute("PRAGMA journal_mode=WAL")
+
+    return engine
 
 
-SessionFactory = create_session()
+engine = make_engine(DB_DSN)
+# create_all adds missing tables only; columns added later go through database.migrate.ensure_columns
+Base.metadata.create_all(engine)
+SessionFactory = sessionmaker(bind=engine)
 
 
 @contextmanager
@@ -123,8 +134,7 @@ def set_user_settings(tgid: int, key: str, value: str):
             session.add(Setting(user_id=user.id, **{key: value}))
 
 
-def init_user(uid: int):
+def init_user(uid: int) -> None:
+    # one INSERT OR IGNORE: a select-then-insert lets two parallel first messages both insert
     with session_manager() as session:
-        user = session.query(User).filter(User.user_id == uid).first()
-        if not user:
-            session.add(User(user_id=uid))
+        session.execute(sqlite_insert(User).values(user_id=uid).on_conflict_do_nothing())

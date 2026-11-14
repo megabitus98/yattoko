@@ -1,6 +1,9 @@
 import importlib
+import os
 import socket
 import sys
+
+import pytest
 
 
 def test_imports():
@@ -21,6 +24,7 @@ def test_selfcheck_reports_versions():
     assert result["ok"] is True
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write to a 0500 directory")
 def test_selfcheck_flags_unwritable_dir(tmp_path, monkeypatch):
     from selfcheck import run_selfcheck
 

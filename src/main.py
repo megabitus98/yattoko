@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -41,6 +41,7 @@ from config import (
     APP_HASH,
     APP_ID,
     BOT_TOKEN,
+    DATA_DIR,
     ENABLE_DIRECT,
     ENABLE_GROUPS,
     ENABLE_SEARCH,
@@ -51,6 +52,7 @@ from config import (
     TMPFILE_PATH,
     WORKERS,
     BotText,
+    check_paths,
 )
 from database.model import (
     get_format_settings,
@@ -431,13 +433,15 @@ def handler_table() -> list[HandlerSpec]:
 
 
 def create_app() -> Client:
-    app = Client("main", APP_ID, APP_HASH, bot_token=BOT_TOKEN, workers=WORKERS)
+    # the session file lives on the data volume next to the database, not in the image
+    app = Client("main", APP_ID, APP_HASH, bot_token=BOT_TOKEN, workers=WORKERS, workdir=DATA_DIR)
     for handler_cls, callback, handler_filters, group in handler_table():
         app.add_handler(handler_cls(callback, handler_filters), group)
     return app
 
 
 if __name__ == "__main__":
+    check_paths(DATA_DIR, TMPFILE_PATH)  # before the purge below empties TMPFILE_PATH
     # Clean up stale temp directories from previous runs
     if os.path.exists(TMPFILE_PATH):
         for item in os.listdir(TMPFILE_PATH):

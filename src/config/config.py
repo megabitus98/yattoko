@@ -4,7 +4,7 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -45,6 +45,15 @@ def parse_bool(raw: str | None, default: bool) -> bool:
     if value in ("false", "0", "no"):
         return False
     raise ConfigError(f"expected true/false/1/0/yes/no, got {raw!r}")
+
+
+def check_paths(data_dir: str, tmp_dir: str) -> None:
+    # The startup purge empties tmp_dir, so it must not overlap the data volume (database, session) either way.
+    data, tmp = os.path.realpath(data_dir), os.path.realpath(tmp_dir)
+    if os.path.commonpath([data, tmp]) in (data, tmp):
+        raise ConfigError(
+            f"TMPFILE_PATH ({tmp_dir}) and DATA_DIR ({data_dir}) must not overlap: TMPFILE_PATH is emptied at startup"
+        )
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
