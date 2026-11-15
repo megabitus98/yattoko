@@ -99,10 +99,14 @@ def test_offered_summary():
     # Instagram's single files list no size or codec: they count for neither
     unknown = {"format_id": "1"}
     formats = [unknown, fmt(720, 1280, "vp09.00.31.08"), fmt(1080, 1920, "vp09.00.40.08"), fmt(2160, 3840), SOUND]
-    assert run.offered(formats, quality_first=True) == {"short_side": 1440, "audio": True}  # capped at 2K
-    # H.264 first (long videos): only what plays as it is counts
-    assert run.offered([fmt(720, 1280), fmt(1080, 1920, "vp9")], quality_first=False) == {"short_side": 720, "audio": False}
-    assert run.offered([], quality_first=True) is None  # no list: nothing to compare with
+    # the sort takes the best at or below 2K: 1080 here, the 2160 H.264 ranks below it
+    assert run.offered(formats, quality_first=True, site="youtube") == {"short_side": 1080, "audio": True}
+    assert run.offered([fmt(2160, 3840)], quality_first=True, site="youtube")["short_side"] == 1440  # 4K only: cut to 2K
+    # H.264 first (long videos): only what plays as it is counts, H.265 only where the bot sorts it first
+    long_video = [fmt(720, 1280), fmt(1080, 1920, "vp9"), fmt(1080, 1920, "hvc1")]
+    assert run.offered(long_video, quality_first=False, site="youtube") == {"short_side": 720, "audio": False}
+    assert run.offered(long_video, quality_first=False, site="tiktok")["short_side"] == 1080
+    assert run.offered([], quality_first=True, site="youtube") is None  # no list: nothing to compare with
 
 
 def test_no_network_stops_the_run(monkeypatch, tmp_path):

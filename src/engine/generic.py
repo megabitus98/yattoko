@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +37,24 @@ from engine.jobs import JobTimeout
 from engine.proxy import exit_label, exits_for, ydl_proxy
 from engine.sites import site_for_url
 from utils import netcheck
+
+# yt-dlp's FormatSorter keeps the sort limits (res:N, hdr:sdr, vcodec:...) in a class-level dict, so two
+# jobs sorting at the same time would sort with each other's limits. yt-dlp makes sorters in one place,
+# YoutubeDL.sort_formats; one lock around it serialises the sorting only (milliseconds), not the download.
+SORT_LOCK = threading.Lock()
+_unlocked_sort_formats = yt_dlp.YoutubeDL.sort_formats
+
+
+def _sort_formats(self, info_dict):
+    with SORT_LOCK:
+        return _unlocked_sort_formats(self, info_dict)
+
+
+yt_dlp.YoutubeDL.sort_formats = _sort_formats
+
+# Instagram's single H.264 files (sizes not listed) have been 720p in every reel seen without a login;
+# a VP9 stream no bigger than this is not worth converting
+INSTAGRAM_SINGLE_FILE_SIDE = 720
 
 # codec setting -> (filter on the first format rungs, codec the sort prefers)
 CODECS = {
@@ -269,6 +288,7 @@ class YoutubeDownload(BaseDownloader):
 
     def _attempt(self, site: str, exit: str, ydl_opts: dict, tmpdir: Path, choose=None):
         self._quality_first = False  # _choose() sets it when it picks the quality-first options
+        self._video_formats_offered = 0  # and this, from the extracted format list
         attempt(
             self._url,
             site,
@@ -292,7 +312,8 @@ class YoutubeDownload(BaseDownloader):
             for path in list(tmpdir.glob("*")):
                 self._convert(path)
         except transcode.TooLong:
-            if not self._quality_first:
+            if not self._quality_first or self._video_formats_offered <= 1:
+                # nothing else to pick (one format, as for a direct link): the same file again would not help
                 logging.info("%s has no H.264 and is too long to convert, sent as it is", self._url)
                 return
             # the site gave no length and the file is too long to convert: download again through the
@@ -300,6 +321,7 @@ class YoutubeDownload(BaseDownloader):
             logging.info("%s is too long to convert, downloading again H.264 first", self._url)
             shutil.rmtree(tmpdir)
             tmpdir.mkdir()
+            netcheck.check_url(self._url, OWN_PUBLIC_IPS)
             self._attempt(site, exit, ydl_opts, tmpdir)
 
     def _converts(self) -> bool:
@@ -310,9 +332,16 @@ class YoutubeDownload(BaseDownloader):
         # A short video gets the best picture up to the quality setting in any codec; a longer one keeps
         # H.264 first, so nothing long is converted. Without a length (Instagram gives none) the best
         # picture is taken and the file's real length decides: too long means one more download, H.264 first.
+        formats = info.get("formats") or []
+        video = [f for f in formats if f.get("vcodec") != "none"]
+        self._video_formats_offered = len(video)
         duration = info.get("duration")
         if not self._converts() or not REENCODE_MAX_SECONDS or (duration and duration > REENCODE_MAX_SECONDS):
             return None
+        if site_for_url(self._url) == "instagram":
+            sides = [min(f["width"], f["height"]) for f in video if f.get("width") and f.get("height")]
+            if sides and max(sides) <= INSTAGRAM_SINGLE_FILE_SIDE:
+                return None  # H.264 first: the single file is as big and needs no conversion
         self._quality_first = True
         return self._setup_formats(quality_first=True)
 
@@ -322,18 +351,27 @@ class YoutubeDownload(BaseDownloader):
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
             raise JobTimeout()
+        timed_out = False
         try:
             # the size check in _download_fitting() sees the converted file
             transcode.to_h264(
                 path, int(self._quality.removesuffix("p")), REENCODE_MAX_SECONDS, remaining, self._say_converting
             )
+        except transcode.ConversionFailed as e:
+            # the source is intact: sending it as it is beats sending nothing
+            logging.warning("Converting %s failed, sent as it is: %s", path.name, e)
         except subprocess.TimeoutExpired:
-            raise JobTimeout() from None
+            timed_out = True
+        if timed_out:
+            # raised outside the except block: the ffmpeg command line (it holds the title) must not
+            # reach classify() through __context__
+            raise JobTimeout()
 
     def _say_converting(self):
-        # a conversion can take a minute; without this the progress message looks stuck at 100 %
+        # A conversion can take a minute; without this the progress message looks stuck at 100 %.
+        # Straight to the message: edit_text() drops edits within 5 s of the last progress update.
         try:
-            self.edit_text(BotText.converting)
+            self._bot_msg.edit_text(BotText.converting)
         except Exception:
             logging.warning("Could not show the converting message", exc_info=True)
 

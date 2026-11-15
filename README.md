@@ -6,7 +6,7 @@ Fork of [Katze-942/ytdlbot](https://github.com/Katze-942/ytdlbot), itself a fork
 
 A Telegram bot for a small allow-listed group of people. Send it a link in a private chat (YouTube, YouTube Shorts, TikTok, Instagram Reels, or any other [site yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)) and it sends the video back in the same chat. If the message has other text around the link, the bot uses the first http(s) link in it.
 
-- Videos come as MP4 with H.264 first, so they play inline in every Telegram app. Nothing is re-encoded: if a site has no H.264 (YouTube above 1080p, some TikTok posts), the bot sends what exists.
+- Videos come as MP4 with H.264 first, so they play inline in every Telegram app. TikTok comes as H.265 (its H.264 stops at 540p with thin sound; H.265 plays in Telegram on iPhone and Mac). Nothing is re-encoded unless `ENABLE_FFMPEG` is on; then a short video gets the best picture up to the quality setting (default 1440p) and VP9 or AV1 is converted to H.264. Without it, a site with no H.264 (YouTube above 1080p) sends what exists.
 - Long videos may come in a lower resolution to stay under Telegram's 2 GB limit.
 - Thumbnail and metadata are embedded in the file.
 - Each user chooses quality, video codec, send as video, audio or file, and SponsorBlock cutting in `/settings`.

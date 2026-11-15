@@ -47,6 +47,7 @@ os.environ.update(
                 "TOKEN_PRICE",
                 "RCLONE_PATH",
                 "ENABLE_FFMPEG",
+                "REENCODE_MAX_SECONDS",
             ],
             "",
         ),

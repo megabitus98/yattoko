@@ -36,6 +36,7 @@ from config import APP_HASH, APP_ID  # noqa: E402
 from engine import transcode  # noqa: E402
 from engine.errors import classify  # noqa: E402
 from engine.generic import YoutubeDownload  # noqa: E402
+from engine.sites import site_for_url  # noqa: E402
 from utils import netcheck  # noqa: E402
 
 CAP = 1440  # the default quality setting (2K); chat 0 has no saved settings
@@ -74,20 +75,24 @@ def probe(path: Path) -> dict:
     }
 
 
-def offered(formats: list[dict], quality_first: bool) -> dict | None:
-    # What the site offered for this download: the biggest smaller side up to CAP among video formats,
-    # and whether any format lists sound. Formats with no size or codec listed (Instagram's single
-    # files) count for neither. H.264 first (long videos, or ENABLE_FFMPEG off) counts only codecs
-    # that play as they are. None when the site listed no formats.
+def offered(formats: list[dict], quality_first: bool, site: str) -> dict | None:
+    # What the site offered for this download: the smaller side the bot's sort would take (the biggest
+    # at or below CAP; a site with only bigger formats is cut to CAP), and whether any format lists
+    # sound. Formats with no size or codec listed (Instagram's single files) count for neither. H.264
+    # first (long videos, or ENABLE_FFMPEG off) counts only codecs that play as they are: H.264, and
+    # H.265 on TikTok, the one site the bot sorts it first on. None when the site listed no formats.
     if not formats:
         return None
+    playable = ("avc", "h264", "hev", "hvc", "h265") if site == "tiktok" else ("avc", "h264")
     sides = [
-        min(f["width"], f["height"], CAP)
+        min(f["width"], f["height"])
         for f in formats
         if f.get("width") and f.get("height") and f.get("vcodec") not in (None, "none")
-        and (quality_first or str(f["vcodec"]).startswith(("avc", "h264", "hev", "hvc", "h265")))
+        and (quality_first or str(f["vcodec"]).startswith(playable))
     ]
-    return {"short_side": max(sides, default=0), "audio": any(f.get("acodec") not in (None, "none") for f in formats)}
+    within = [side for side in sides if side <= CAP]
+    best = max(within) if within else min(min(sides), CAP) if sides else 0
+    return {"short_side": best, "audio": any(f.get("acodec") not in (None, "none") for f in formats)}
 
 
 def evaluate(found: dict, expect: dict, offer: dict | None) -> tuple[str, str]:
@@ -136,7 +141,7 @@ def run_link(link: dict) -> tuple[dict, YoutubeDownload | None]:
         status = "link_gone" if classify(e) == "unavailable" else "downloader_broken"
         return {"name": link["name"], "status": status, "reason": classify(e), **NOTHING_FOUND}, downloader
     # the mode of the file that was kept: a too-long conversion downloads again H.264 first
-    offer = offered(seen.get("formats", []), quality_first=downloader._quality_first)
+    offer = offered(seen.get("formats", []), quality_first=downloader._quality_first, site=site_for_url(link["url"]))
     status, reason = evaluate(found, link, offer)
     return {"name": link["name"], "status": status, "reason": reason, **found, "offered": offer}, downloader
 

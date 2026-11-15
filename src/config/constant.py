@@ -130,7 +130,7 @@ class BotText:
 I work with YouTube, Shorts, TikTok, Instagram and the other [sites yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). If your message has other text around the link, I use the first link in it.
 
 <b>What you get</b>
-→ Video up to 1080p by default, H.264 first so it plays inline in Telegram
+→ Video up to 1440p (2K) by default, in a form that plays inline in every Telegram app
 → The original audio track, unless the owner set a preferred language
 → Thumbnail and metadata embedded in the file
 → Long videos may come in a lower resolution to stay under Telegram's 2 GB limit
@@ -156,7 +156,7 @@ License: Apache-2.0. Not affiliated with or endorsed by the upstream authors.
 Choose how I send your videos.
 
 <b>Video codec</b>
-→ Auto (H.264 first): plays inline in every Telegram app. YouTube has H.264 only up to 1080p, so for 1440p choose VP9 or AV1.
+→ Auto: plays inline in every Telegram app (H.264, or H.265 from TikTok). Above 1080p YouTube has no H.264; short videos may be converted, longer ones come in 1080p.
 → VP9: smaller files, up to 1440p on YouTube.
 → AVC1 (H.264): H.264 only where the site has it.
 → AV1: smallest files, but older devices may not play it.

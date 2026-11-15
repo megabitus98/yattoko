@@ -367,7 +367,9 @@ def test_too_long_to_convert_downloads_again_h264_first(fake_ydl, monkeypatch):
     monkeypatch.setattr(generic.transcode, "to_h264", too_long)
     init_user(782)
     downloader, edits = fake_downloader("https://www.instagram.com/reel/abc/", user_id=782)
-    fake_ydl.results = [dict(VIDEO), dict(VIDEO)]
+    # Instagram as it lists a reel: the single H.264 file without size, VP9 streams with sizes
+    listed = [{"format_id": "1"}, {"format_id": "v", "vcodec": "vp09.00.40.08", "acodec": "none", "width": 1080, "height": 1920}]
+    fake_ydl.results = [dict(VIDEO, formats=listed), dict(VIDEO, formats=listed)]
     (Path(downloader._tempdir.name) / "vp9.mp4").write_bytes(b"x")
     downloader._download(downloader._setup_formats())
     first, second = fake_ydl.instances
@@ -395,3 +397,98 @@ def test_caption_is_plain_text(tmp_path):
     downloader.send_something(chat_id=1, files=[video], _type="video", caption="<i>title *x*")
     assert sent[0]["caption"] == "<i>title *x*"
     assert sent[0]["parse_mode"] == enums.ParseMode.DISABLED
+
+
+def _ffmpeg_on(monkeypatch):
+    from engine import generic
+
+    monkeypatch.setattr(generic, "ENABLE_FFMPEG", True)
+    return generic
+
+
+def test_conversion_failure_sends_the_original(fake_ydl, monkeypatch):
+    generic = _ffmpeg_on(monkeypatch)
+
+    def broken(path, max_side, max_seconds, timeout, on_start=None):
+        raise generic.transcode.ConversionFailed("[libx264] width not divisible by 2")
+
+    monkeypatch.setattr(generic.transcode, "to_h264", broken)
+    downloader, _ = fake_downloader("https://www.youtube.com/watch?v=x")
+    fake_ydl.results = [dict(VIDEO, duration=30)]
+    (Path(downloader._tempdir.name) / "vp9.mp4").write_bytes(b"x")
+    assert [p.name for p in downloader._download(downloader._setup_formats())] == ["vp9.mp4"]
+
+
+def test_conversion_timeout_is_not_read_as_login(fake_ydl, monkeypatch):
+    # the ffmpeg command holds the file name, so the video title; it must not decide the reply
+    import subprocess
+
+    from engine.errors import classify
+    from engine.jobs import JobTimeout
+
+    generic = _ffmpeg_on(monkeypatch)
+
+    def slow(path, max_side, max_seconds, timeout, on_start=None):
+        raise subprocess.TimeoutExpired(["ffmpeg", "-i", "/tmp/x/How to sign in to Gmail.mp4"], timeout)
+
+    monkeypatch.setattr(generic.transcode, "to_h264", slow)
+    downloader, _ = fake_downloader("https://www.youtube.com/watch?v=x")
+    fake_ydl.results = [dict(VIDEO, duration=30)]
+    (Path(downloader._tempdir.name) / "vp9.mp4").write_bytes(b"x")
+    with pytest.raises(JobTimeout) as stopped:
+        downloader._download(downloader._setup_formats())
+    assert stopped.value.__context__ is None
+    assert classify(stopped.value) == "other"
+
+
+def test_converting_message_shown_right_after_progress(monkeypatch):
+    # the progress edits are throttled to one per 5 s; the converting message must not be dropped
+    downloader, edits = fake_downloader("https://www.youtube.com/watch?v=x")
+    downloader.edit_text("▶️ Downloading 99 %")
+    downloader._say_converting()
+    assert edits[-1] == BotText.converting
+
+
+def test_instagram_up_to_720_stays_h264_first(monkeypatch):
+    # Instagram's single H.264 file (size not listed) has been 720p in every reel seen; a VP9 stream of
+    # the same size is not worth converting
+    _ffmpeg_on(monkeypatch)
+    init_user(783)
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/", user_id=783)
+    single = {"format_id": "1", "url": "https://example.invalid/1", "ext": "mp4"}
+    vp9 = lambda side: {"format_id": f"v{side}", "vcodec": "vp09.00.31.08", "acodec": "none", "width": side, "height": side * 16 // 9}
+    assert downloader._choose({"formats": [single, vp9(720)]}) is None
+    assert downloader._choose({"formats": [single, vp9(720), vp9(1080)]})["format_sort"][0] == "hdr:sdr"
+
+
+def test_too_long_single_format_is_sent_as_it_is(fake_ydl, monkeypatch):
+    # a direct link has one format: downloading it again H.264 first would fetch the same file
+    generic = _ffmpeg_on(monkeypatch)
+
+    def too_long(path, max_side, max_seconds, timeout, on_start=None):
+        raise generic.transcode.TooLong()
+
+    monkeypatch.setattr(generic.transcode, "to_h264", too_long)
+    downloader, _ = fake_downloader("https://example.com/film.webm")
+    fake_ydl.results = [dict(VIDEO, formats=[{"format_id": "webm", "url": "https://example.com/film.webm"}])]
+    (Path(downloader._tempdir.name) / "film.webm").write_bytes(b"x")
+    assert [p.name for p in downloader._download(downloader._setup_formats())] == ["film.webm"]
+    assert len(fake_ydl.instances) == 1
+
+
+def test_format_sorting_is_serialised(monkeypatch):
+    # yt-dlp's FormatSorter keeps its limits (res:N, hdr:sdr, vcodec:...) in a class-level dict, so two
+    # jobs sorting at once would use each other's limits; generic.py holds one lock while yt-dlp sorts
+    from engine import generic
+    from yt_dlp.utils import FormatSorter
+
+    held = []
+    real = FormatSorter.calculate_preference
+    monkeypatch.setattr(FormatSorter, "calculate_preference", lambda self, f: held.append(generic.SORT_LOCK.locked()) or real(self, f))
+    from test_formats import select
+
+    select(generic.build_format_options("720p", "auto", "video", ""), [
+        {"format_id": "a", "url": "https://example.invalid/a", "ext": "mp4", "vcodec": "avc1", "acodec": "aac", "width": 1280, "height": 720},
+        {"format_id": "b", "url": "https://example.invalid/b", "ext": "mp4", "vcodec": "avc1", "acodec": "aac", "width": 640, "height": 360},
+    ])
+    assert held and all(held)
