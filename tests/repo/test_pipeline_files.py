@@ -35,24 +35,98 @@ def test_no_pull_request_target():
 
 
 def test_no_statuses_write():
-    # the regression status belongs to Jenkins; no workflow may write commit statuses
+    # every result is a check run of a job; no workflow writes commit statuses
     assert WORKFLOWS
     assert [p.name for p in WORKFLOWS if re.search(r"statuses:\s*write", p.read_text(encoding="utf-8"))] == []
+
+
+OWN_BRANCHES = "github.event.pull_request.head.repo.full_name == github.repository"
+HOME_RUNNER = ["self-hosted", "ytdlbot-regression"]
+
+
+def jobs():
+    # (workflow file name, job id, job) for every job in every workflow
+    return [(path.name, job_id, job) for path in WORKFLOWS for job_id, job in load(path)["jobs"].items()]
+
+
+def checks_out(job):
+    return any(s.get("uses", "").startswith("actions/checkout@") for s in job.get("steps", []))
 
 
 def test_ci_checks_out_head_sha():
     ci = load(CI)
     assert list(ci[True]) == ["pull_request"]  # PyYAML reads the `on` key as True
-    # the job id is the check name merge-and-promote waits for (check-runs?check_name=unit)
-    assert list(ci["jobs"]) == ["unit"]
-    [job] = ci["jobs"].values()
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in job["if"]
-    [checkout] = [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")]
-    assert checkout["with"] == {
-        "ref": "${{ github.event.pull_request.head.sha }}",
-        "persist-credentials": False,
-        "fetch-depth": 0,
-    }
+    assert list(ci["jobs"]) == ["unit", "scan", "push", "regression", "merge", "notify"]
+    for job_id, job in ci["jobs"].items():
+        assert OWN_BRANCHES in job["if"], job_id
+    checkouts = {job_id: [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")] for job_id, job in ci["jobs"].items()}
+    assert {job_id for job_id, found in checkouts.items() if found} == {"unit", "scan"}
+    for job_id in ("unit", "scan"):
+        [checkout] = checkouts[job_id]
+        assert checkout["with"] == {
+            "ref": "${{ github.event.pull_request.head.sha }}",
+            "persist-credentials": False,
+            "fetch-depth": 0,
+        }
+
+
+def test_permissions_per_job():
+    # nothing is granted at workflow level; each job states its own
+    for path in WORKFLOWS:
+        assert load(path)["permissions"] == {}, path.name
+    for name, job_id, job in jobs():
+        assert "permissions" in job, (name, job_id)
+
+
+def test_write_tokens_never_run_checked_out_code():
+    # a job that can write anything checks nothing out, so no code from a PR runs next to the token
+    writers = {(name, job_id): job for name, job_id, job in jobs() if "write" in job["permissions"].values()}
+    assert set(writers) == {("ci.yml", "push"), ("ci.yml", "merge"), ("promote.yml", "promote")}
+    assert [key for key, job in writers.items() if checks_out(job)] == []
+
+
+def test_packages_write_only_push_and_promote():
+    packages = {(name, job_id) for name, job_id, job in jobs() if job["permissions"].get("packages") == "write"}
+    assert packages == {("ci.yml", "push"), ("promote.yml", "promote")}
+    texts = {p.name: p.read_text(encoding="utf-8") for p in WORKFLOWS}
+    assert [name for name, text in texts.items() if "imagetools create" in text] == ["promote.yml"]
+
+
+def test_home_runner_only_runs_the_regression():
+    home = {(name, job_id): job for name, job_id, job in jobs() if "self-hosted" in job["runs-on"]}
+    assert set(home) == {("ci.yml", "regression"), ("weekly.yml", "regression")}
+    for key, job in home.items():
+        assert job["runs-on"] == HOME_RUNNER, key
+        assert job["permissions"] == {"packages": "read"}, key
+        assert not checks_out(job), key
+
+
+def test_merge_only_dependabot_uv():
+    merge = load(CI)["jobs"]["merge"]
+    assert "github.event.pull_request.user.login == 'dependabot[bot]'" in merge["if"]
+    assert "startsWith(github.event.pull_request.head.ref, 'dependabot/uv/')" in merge["if"]
+    assert merge["needs"] == "regression"
+
+
+def test_promote_requires_every_gate():
+    # the check names promote waits for are exactly the ci jobs a release depends on
+    text = (ROOT / ".github" / "workflows" / "promote.yml").read_text(encoding="utf-8")
+    [names] = re.findall(r"for check_name in ([a-z ]+); do", text)
+    assert names.split() == ["unit", "scan", "push", "regression"]
+    assert set(names.split()) <= set(load(CI)["jobs"])
+
+
+def test_malware_check_on_every_sync():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    syncs = [line for line in dockerfile.splitlines() if "uv sync" in line]
+    assert len(syncs) == 2
+    assert [line for line in syncs if "UV_MALWARE_CHECK=1 uv sync" not in line] == []
+    assert load(CI)["jobs"]["unit"]["env"]["UV_MALWARE_CHECK"] == "1"
+
+
+def test_images_in_run_steps_pinned():
+    weekly = load(ROOT / ".github" / "workflows" / "weekly.yml")
+    assert re.fullmatch(r"anchore/grype:v[\d.]+@sha256:[0-9a-f]{64}", weekly["env"]["grype_image"])
 
 
 def test_ci_passes_lock_versions_as_build_args():

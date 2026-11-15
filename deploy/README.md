@@ -36,4 +36,36 @@ The NetworkPolicy denies all ingress and allows egress only to the cluster DNS (
 
 ## Updates
 
-Nothing deploys from `main` directly. `.github/workflows/ci.yml` tests every PR and pushes its image as `sha-<head sha>`, Jenkins runs the regression suite on that image, and `.github/workflows/merge-and-promote.yml` copies the tested digest to `stable` (and `YYYY.MM.DD-<short sha>`) only when the commit on `main` has the same tree as the tested PR head. Keel then rolls the pod.
+Nothing deploys from `main` directly. Everything runs in GitHub Actions:
+
+- `.github/workflows/ci.yml`, on every PR from a branch of this repository (Dependabot's and yours). On GitHub's runners: `unit` (repository checks, the image build with uv's malware check, unit tests) and `scan` (`uv audit`; fails on known vulnerabilities the PR adds), both with a read-only token; then `push`, which loads the tested image and pushes it as `sha-<head sha>` without checking out any code. On the home runner: `regression`, the real downloads in that image. For Dependabot `uv` PRs, `merge` squash-merges a green PR that is level with `main` (one that is behind gets `@dependabot rebase` and is tested again) and starts `promote`. When a job fails, `notify` messages you through the test bot.
+- `.github/workflows/promote.yml`, on every push to `main` and when `merge` starts it: copies the tested digest to `stable` (and `YYYY.MM.DD-<short sha>`) only when the commit on `main` came from a PR whose head passed `unit`, `scan`, `push` and `regression` and has the same tree. A direct push to `main` promotes nothing; it ships with the next tested update. Keel then rolls the pod.
+- `.github/workflows/weekly.yml`, Mondays: the regression on `stable` (home runner), the full `uv audit`, Grype on the stable image (fails on fixable high or critical findings), and a drift check (yt-dlp or curl-cffi more than 3 days behind PyPI, a Dependabot PR open for more than 3 days, a newer `python:3.12-alpine` base than the Dockerfile's). A problem is sent through the test bot; a clean week calls `HEARTBEAT_URL`.
+
+Docker and GitHub Actions updates from Dependabot are tested the same way but wait for you to merge them.
+
+### Secrets
+
+In Settings → Secrets and variables, add each of these under **Actions** and again under **Dependabot** (runs started by Dependabot only read the Dependabot ones):
+
+- `TEST_BOT_TOKEN`, `TEST_CHAT_ID`: a separate test bot, never the production bot, and the chat it reports to (your private chat with it). The regression uploads its smallest result there.
+- `TEST_APP_ID`, `TEST_APP_HASH`: the API ID and hash the test bot logs in with.
+- `HEARTBEAT_URL` (Actions only, optional): a push monitor URL, for example from Uptime Kuma, called after a clean weekly run.
+
+The test secrets reach the code under test inside the regression container, so they must belong to a throwaway test bot. Without them the regression only downloads and `notify` stays silent; GitHub's own failure notice still goes out.
+
+### Home runner
+
+The regression has to download from a home connection: video sites often block the datacenter addresses of GitHub's runners. It runs on a self-hosted runner with the label `ytdlbot-regression`:
+
+- A small VM or container host with Docker and nothing else on it: the regression runs new dependency versions, and a container escape would land on that host.
+- Register it for this repository only (Settings → Actions → Runners → New self-hosted runner), add the label `ytdlbot-regression` (`./config.sh ... --labels ytdlbot-regression`), and run it as a service. Prefer `--ephemeral` with a wrapper that registers a fresh runner after each job, so no job can leave something behind for the next one.
+- Internet only: block the host from your LAN on the router or with a separate VLAN, and keep its containers off private addresses: `iptables` rules in the `DOCKER-USER` chain that drop the three RFC 1918 ranges, after a rule that accepts your DNS server if it sits on a private address.
+- It needs no secrets of its own: each job brings a read-only registry token and the test bot secrets, and removes its registry login when it ends.
+
+If the runner is offline, the regression job waits (up to a day) and no update merges until it is back.
+
+### Before making the repository public
+
+- Settings → Actions → General → "Approval for running fork pull request workflows from contributors": **Require approval for all external contributors**. A fork's PR runs its own copy of the workflows and could send a job to the home runner, so nothing from a fork may start without your click. Never approve one that changes anything under `.github/`. Dependabot's and your own PRs are branches of this repository and keep running without approval.
+- Make the image package public, then delete the `ghcr-pull` secret and its classic token.

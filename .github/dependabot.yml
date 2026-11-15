@@ -1,6 +1,6 @@
 # Modified 2026 by megabitus98 (fork): new file (spec 6.14): uv daily with yt-dlp alone and uncooled,
 # docker weekly without Python minor or major bumps, github-actions weekly and grouped.
-# merge-and-promote merges only the uv PRs; docker and github-actions PRs wait for the owner.
+# ci.yml's merge job merges only the uv PRs; docker and github-actions PRs wait for the owner.
 version: 2
 updates:
   - package-ecosystem: uv

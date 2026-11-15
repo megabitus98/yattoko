@@ -1,0 +1,183 @@
+# Weekly look at what is deployed (spec 6.14): the real-download regression on `stable` (the home runner),
+# then on a GitHub runner the full uv audit of main's lock, Grype on the stable image's Alpine and other
+# packages, and a drift check (yt-dlp or curl-cffi more than 3 days behind PyPI, a Dependabot PR open for
+# more than 3 days, a newer python:3.12-alpine base). Problems reach the owner through the test bot; a clean week pings HEARTBEAT_URL (a
+# dead-man's switch, optional) so a week with no run at all is noticed too.
+# Modified 2026 by megabitus98 (fork): new workflow
+
+name: weekly
+
+on:
+  schedule:
+    - cron: "23 5 * * 1" # Mondays 05:23 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  image: ghcr.io/${{ github.repository }}
+  # bump by hand: Dependabot does not see images used in run steps
+  grype_image: anchore/grype:v0.121.3@sha256:13113eeceab017260370cf540e1d25442c59665fd07d1b09b66d63bb0c282887
+
+jobs:
+  regression:
+    runs-on: [self-hosted, ytdlbot-regression]
+    timeout-minutes: 45
+    permissions:
+      packages: read # pull stable while the package is private
+    env:
+      TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+      TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+      APP_ID: ${{ secrets.TEST_APP_ID }}
+      APP_HASH: ${{ secrets.TEST_APP_HASH }}
+    steps:
+      - name: Real downloads in the stable image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" # the registry login never outlives the job
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker pull "$image:stable"
+          docker logout ghcr.io
+          echo "stable is $(docker image inspect "$image:stable" --format '{{index .RepoDigests 0}}')" >> "$GITHUB_STEP_SUMMARY"
+          upload=()
+          if [ -n "$TEST_BOT_TOKEN" ]; then
+            upload=(--upload)
+          else
+            echo "::warning::no test bot secrets: downloads only, the upload was not checked"
+          fi
+          exit_code=0
+          docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=10g \
+            --cap-drop=ALL --security-opt no-new-privileges \
+            -e TEST_BOT_TOKEN -e TEST_CHAT_ID -e APP_ID -e APP_HASH \
+            "$image:stable" python /app/regression/run.py "${upload[@]}" \
+            > "$RUNNER_TEMP/regression.jsonl" || exit_code=$?
+          { echo '```'; cat "$RUNNER_TEMP/regression.jsonl"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$exit_code"
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker image rm "$image:stable" >/dev/null 2>&1 || true
+          rm -rf "$RUNNER_TEMP/docker-config"
+
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read # pull stable while the package is private
+      pull-requests: read # open Dependabot PRs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: "false"
+
+      - name: Pull stable
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker pull "$image:stable"
+          docker logout ghcr.io
+
+      - name: Python packages (uv audit)
+        if: ${{ !cancelled() }}
+        run: |
+          (uv audit --frozen --python-version 3.12 --python-platform x86_64-unknown-linux-musl \
+            --output-format json) > "$RUNNER_TEMP/audit.json" || true
+          jq -e .summary "$RUNNER_TEMP/audit.json" > /dev/null || { echo "::error::uv audit gave no report"; exit 1; }
+          line='"\(.dependency.name) \(.dependency.version): \(.id) (\(.display_id)), fixed in: \(.fix_versions | join(", ") | if . == "" then "nothing yet" else . end)"'
+          { echo "### uv audit"; echo '```'; jq -r ".vulnerabilities[] | $line" "$RUNNER_TEMP/audit.json" | sort -u; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # one without a fix is listed but cannot be acted on, so only the fixable ones fail the run
+          fixable=$(jq -r ".vulnerabilities[] | select(.fix_versions | length > 0) | $line" "$RUNNER_TEMP/audit.json" | sort -u)
+          if [ -n "$fixable" ]; then
+            echo "::error::vulnerabilities with a fix in main's lock: $(echo "$fixable" | tr '\n' ';')"
+            exit 1
+          fi
+
+      - name: Image packages (Grype)
+        if: ${{ !cancelled() }}
+        run: |
+          # Grype gets the saved image and no token
+          docker save "$image:stable" -o "$RUNNER_TEMP/stable.tar"
+          docker run --rm -v "$RUNNER_TEMP/stable.tar:/scan/stable.tar:ro" "$grype_image" \
+            docker-archive:/scan/stable.tar --only-fixed --fail-on high
+
+      - name: Drift
+        if: ${{ !cancelled() }}
+        run: |
+          problems=()
+          three_days_ago=$(date -u -d '3 days ago' +%s)
+          labels=$(docker image inspect "$image:stable" --format '{{json .Config.Labels}}')
+          for package in yt-dlp curl-cffi; do
+            running=$(jq -r --arg key "io.ytdlbot.$package" '.[$key] // "unknown"' <<< "$labels")
+            pypi=$(curl -fsSL "https://pypi.org/pypi/$package/json")
+            latest=$(jq -r .info.version <<< "$pypi")
+            uploaded=$(jq -r '[.urls[].upload_time_iso_8601] | min' <<< "$pypi")
+            if [ "$running" != "$latest" ] && [ "$(date -u -d "$uploaded" +%s)" -lt "$three_days_ago" ]; then
+              problems+=("stable runs $package $running; PyPI has had $latest since ${uploaded%%T*}")
+            fi
+          done
+          # a newer Alpine for Python 3.12 is a manual PR (it changes deno and ffmpeg), so only report it
+          base_tag=$(sed -n 's/^FROM python:\(3\.12-alpine3\.[0-9]*\)@.*/\1/p' Dockerfile)
+          newest_tag=$(curl -fsSL "https://hub.docker.com/v2/namespaces/library/repositories/python/tags?name=3.12-alpine3&page_size=100" \
+            | jq -r '.results[].name' | grep -E '^3\.12-alpine3\.[0-9]+$' | sort -V | tail -1)
+          if [ -z "$base_tag" ] || [ -z "$newest_tag" ]; then
+            problems+=("could not compare the base image tag (Dockerfile: '${base_tag}', Docker Hub: '${newest_tag}')")
+          elif [ "$newest_tag" != "$base_tag" ] && [ "$(printf '%s\n%s\n' "$base_tag" "$newest_tag" | sort -V | tail -1)" = "$newest_tag" ]; then
+            problems+=("python:$newest_tag exists; the Dockerfile uses python:$base_tag")
+          fi
+          cutoff=$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          while read -r old_pr; do
+            [ -n "$old_pr" ] && problems+=("Dependabot PR open for more than 3 days: $old_pr")
+          done < <(gh pr list --app dependabot --state open --json number,title,createdAt \
+            --jq ".[] | select(.createdAt < \"$cutoff\") | \"#\(.number) \(.title)\"")
+          if [ "${#problems[@]}" -gt 0 ]; then
+            printf '%s\n' "${problems[@]}" >> "$GITHUB_STEP_SUMMARY"
+            printf '::error::%s\n' "${problems[@]}"
+            exit 1
+          fi
+          echo "No drift." >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    needs: [regression, checks]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    env:
+      TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+      TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+      HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
+      regression_result: ${{ needs.regression.result }}
+      checks_result: ${{ needs.checks.result }}
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Heartbeat or tell the owner
+        run: |
+          # URLs that carry a token go through curl's config on stdin, not the command line
+          if [ "$regression_result" = success ] && [ "$checks_result" = success ]; then
+            [ -z "$HEARTBEAT_URL" ] || printf 'url = "%s"\n' "$HEARTBEAT_URL" | curl -fsS -K - -o /dev/null
+            exit 0
+          fi
+          if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
+            echo "::warning::no test bot secrets: only GitHub's own notice reports this week's problems"
+            exit 0
+          fi
+          text="ytdlbot weekly: regression $regression_result, checks $checks_result. $run_url"
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TEST_BOT_TOKEN" |
+            curl -fsS -K - --data-urlencode "chat_id=$TEST_CHAT_ID" --data-urlencode "text=$text" -o /dev/null

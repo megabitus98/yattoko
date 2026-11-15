@@ -1,15 +1,21 @@
-# Every PR from a branch of this repository (never from forks): repository checks, unit tests in the
-# image's test target, then the runtime image pushed as sha-<head sha> for Jenkins' regression run.
-# Modified 2026 by megabitus98 (fork): new workflow (spec 6.14); nothing is built on push to main
+# Every PR from a branch of this repository: Dependabot's and the owner's (never from forks; once public,
+# a fork's runs wait for the owner's approval, see deploy/README.md). Code from the PR, including new
+# dependency versions, runs only in jobs that hold no write token:
+#   unit        GitHub runner, read-only: repository checks, the image build, unit tests; saves the image
+#   scan        GitHub runner, read-only: uv audit; fails on vulnerabilities the PR adds to its base
+#   push        GitHub runner, packages: write, no checkout: loads that image, pushes it as sha-<head sha>
+#   regression  the home runner, read-only: real downloads in the pushed image (src/regression/README.md)
+#   merge       GitHub runner, Dependabot uv PRs only: squash-merges a green PR level with main, starts promote
+#   notify      GitHub runner: tells the owner through the test bot when a job failed
+# The job ids are the check names promote.yml requires. Nothing is built on push to main.
+# Modified 2026 by megabitus98 (fork): new workflow (spec 6.14)
 
 name: ci
 
 on:
   pull_request:
 
-permissions:
-  contents: read
-  packages: write # push sha-<head sha>; set explicitly so Dependabot's runs get it too
+permissions: {} # each job asks for its own
 
 concurrency:
   group: ci-${{ github.event.pull_request.number }}
@@ -19,14 +25,18 @@ defaults:
   run:
     shell: bash
 
+env:
+  head_sha: ${{ github.event.pull_request.head.sha }}
+  image: ghcr.io/${{ github.repository }}
+
 jobs:
-  # The job id is the check name merge-and-promote waits for; green also means the image was pushed.
   unit:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     env:
-      head_sha: ${{ github.event.pull_request.head.sha }}
-      image: ghcr.io/${{ github.repository }}
+      UV_MALWARE_CHECK: "1" # uv stops before installing a version OSV lists as malware; fails closed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,6 +47,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.8" # the uv image in the Dockerfile
+          enable-cache: "false"
 
       - name: Repository checks
         run: uv run --locked pytest -q tests/repo # --locked: a stale uv.lock fails here, it is not rewritten
@@ -55,20 +66,215 @@ jobs:
             --build-arg CURL_CFFI_VERSION="$curl_cffi_version"
             --build-arg KURIGRAM_VERSION="$kurigram_version"
           )
-          docker build "${build_args[@]}" --target runtime -t "$image:sha-$head_sha" .
+          docker build "${build_args[@]}" --target runtime -t ytdlbot:runtime .
           docker build "${build_args[@]}" --target test -t ytdlbot:test .
 
       - name: Unit tests
         run: docker run --rm ytdlbot:test
 
-      - name: Push the runtime image
+      - name: Save the runtime image
+        run: docker save ytdlbot:runtime | gzip -1 > "$RUNNER_TEMP/ytdlbot-image.tar.gz"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/ytdlbot-image.tar.gz
+          archive: false # one file as it is; the artifact is named after it
+          retention-days: 1 # push deletes it sooner; the plan's artifact storage is small
+          if-no-files-found: error
+
+  scan:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      base_sha: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0 # the base commit's lock is compared
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: "false"
+
+      - name: Audit the lock against its base
+        run: |
+          # uv reads pyproject.toml and uv.lock only; nothing from the PR is built or run. The image's
+          # platform, so environment markers resolve as they do in the image. Without a report (OSV
+          # unreachable, a uv error) the job fails: no report is not a clean report.
+          audit() {
+            (cd "$1" && uv audit --frozen --python-version 3.12 --python-platform x86_64-unknown-linux-musl \
+              --output-format json) > "$2" || true
+            jq -e .summary "$2" > /dev/null || { echo "::error::uv audit gave no report for $1"; exit 1; }
+          }
+          keys() { jq -r '.vulnerabilities[] | "\(.dependency.name) \(.id)"' "$1" | sort -u; }
+
+          mkdir "$RUNNER_TEMP/base"
+          git show "$base_sha:pyproject.toml" > "$RUNNER_TEMP/base/pyproject.toml"
+          git show "$base_sha:uv.lock" > "$RUNNER_TEMP/base/uv.lock"
+          audit "$RUNNER_TEMP/base" "$RUNNER_TEMP/base.json"
+          audit . "$RUNNER_TEMP/head.json"
+
+          added=$(comm -13 <(keys "$RUNNER_TEMP/base.json") <(keys "$RUNNER_TEMP/head.json"))
+          known=$(keys "$RUNNER_TEMP/base.json" | wc -l)
+          {
+            echo "### uv audit"
+            echo "Known before this PR (reported by the weekly job, not blocking): $known"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$added" ]; then
+            # the added ones with their fix versions, for the owner reading the failure
+            jq -r --arg added "$added" '($added | split("\n")) as $keys | .vulnerabilities[]
+              | select(("\(.dependency.name) \(.id)") as $key | $keys | index($key))
+              | "\(.dependency.name) \(.dependency.version): \(.id) (\(.display_id)), fixed in: \(.fix_versions | join(", ") | if . == "" then "nothing yet" else . end)"' \
+              "$RUNNER_TEMP/head.json" | sort -u > "$RUNNER_TEMP/added.txt"
+            { echo "Added by this PR:"; echo '```'; cat "$RUNNER_TEMP/added.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::this PR adds known vulnerabilities: $(echo "$added" | tr '\n' ';')"
+            exit 1
+          fi
+
+  push:
+    needs: [unit, scan]
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write # push sha-<head sha>
+      actions: write # delete the image artifact once it is pushed
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # No checkout: nothing from the PR runs here. The archive is loaded, never run, and only the one tag
+      # computed here is pushed, whatever else the archive names.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ytdlbot-image.tar.gz
+          path: ${{ runner.temp }}/image
+
+      - name: Push the tested image
+        run: |
+          docker load -i "$RUNNER_TEMP/image/ytdlbot-image.tar.gz"
+          docker tag ytdlbot:runtime "$image:sha-$head_sha"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # the regression may already have run on this tag; a re-run must not move it to another digest
+          if docker buildx imagetools inspect "$image:sha-$head_sha" >/dev/null 2>&1; then
+            echo "$image:sha-$head_sha already exists, kept as it is"
+          else
+            docker push "$image:sha-$head_sha"
+          fi
+          docker logout ghcr.io
+
+      - name: Delete the image artifact
+        run: |
+          artifact_id=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "ytdlbot-image.tar.gz") | .id')
+          [ -n "$artifact_id" ] && gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$artifact_id"
+
+  regression:
+    needs: push
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, ytdlbot-regression]
+    timeout-minutes: 45
+    permissions:
+      packages: read # pull sha-<head sha> while the package is private
+    env:
+      # the test bot only, never the production bot; Dependabot's runs read these from the Dependabot secrets
+      TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+      TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+      APP_ID: ${{ secrets.TEST_APP_ID }}
+      APP_HASH: ${{ secrets.TEST_APP_HASH }}
+    steps:
+      # No checkout: the run, its link list and its settings are inside the image under test.
+      - name: Real downloads in the pushed image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config" # the registry login never outlives the job
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          # Jenkins may already have tested this tag; a re-run must not move it to another digest
-          if docker buildx imagetools inspect "$image:sha-$head_sha" >/dev/null 2>&1; then
-            echo "$image:sha-$head_sha already exists, kept as it is"
+          docker pull "$image:sha-$head_sha"
+          docker logout ghcr.io
+          upload=()
+          if [ -n "$TEST_BOT_TOKEN" ]; then
+            upload=(--upload)
+          else
+            echo "::warning::no test bot secrets: downloads only, the upload was not checked"
+          fi
+          # the production security context; the runner host keeps containers off private addresses
+          exit_code=0
+          docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=10g \
+            --cap-drop=ALL --security-opt no-new-privileges \
+            -e TEST_BOT_TOKEN -e TEST_CHAT_ID -e APP_ID -e APP_HASH \
+            "$image:sha-$head_sha" python /app/regression/run.py "${upload[@]}" \
+            > "$RUNNER_TEMP/regression.jsonl" || exit_code=$?
+          { echo "### Regression"; echo '```'; cat "$RUNNER_TEMP/regression.jsonl"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          case "$exit_code" in
+            0) ;;
+            2) echo "::error::downloader broken (see the JSON lines in the summary)" ;;
+            3) echo "::error::a link is gone: replace it in src/regression/links.json" ;;
+            *) echo "::error::the regression run could not start (exit $exit_code): no network or DNS?" ;;
+          esac
+          exit "$exit_code"
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker image rm "$image:sha-$head_sha" >/dev/null 2>&1 || true
+          rm -rf "$RUNNER_TEMP/docker-config"
+
+  merge:
+    needs: regression
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/uv/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # squash-merge
+      pull-requests: write # merge, the rebase comment
+      actions: write # start promote: a merge made with GITHUB_TOKEN starts no push workflow
+    concurrency:
+      group: merge # one merge decision at a time, each against the main it just read
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Merge, or ask for a rebase
+        run: |
+          main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          : "${main_sha:?}"
+          behind_by=$(gh api "repos/$GH_REPO/compare/$main_sha...$head_sha" --jq .behind_by)
+          if [ "$behind_by" = 0 ]; then
+            # main is the tested head's base, so the squash commit has exactly the tested tree
+            gh pr merge "$pr_number" --squash --match-head-commit "$head_sha"
+            gh workflow run promote.yml --ref main
+            echo "Merged #$pr_number and started promote"
+          else
+            # merged now, main would hold a tree nobody tested; the rebased head runs this workflow again
+            gh pr comment "$pr_number" --body "@dependabot rebase"
+            echo "::notice::#$pr_number is $behind_by commit(s) behind main; asked Dependabot to rebase"
+          fi
+
+  notify:
+    needs: [unit, scan, push, regression, merge]
+    if: failure() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions: {}
+    env:
+      TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+      TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+      text: "ytdlbot: CI failed on PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }}). ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+    steps:
+      - name: Tell the owner
+        run: |
+          if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
+            echo "::warning::no test bot secrets: only GitHub's own notice reports this failure"
             exit 0
           fi
-          docker push "$image:sha-$head_sha"
+          # the token goes through curl's config on stdin, not the command line
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TEST_BOT_TOKEN" |
+            curl -fsS -K - --data-urlencode "chat_id=$TEST_CHAT_ID" --data-urlencode "text=$text" -o /dev/null

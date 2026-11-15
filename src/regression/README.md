@@ -4,9 +4,9 @@ Real downloads of a few known links through the bot's own download path (`Youtub
 
 Every run uses the same home IP as the production bot and spends its reputation with the sites, so the list stays small on purpose.
 
-## How Jenkins runs it
+## How the pipeline runs it
 
-Run it in the exact image under test, with the production security context, on a Docker network that cannot reach private address ranges:
+The `regression` jobs in `.github/workflows/ci.yml` (every PR, on the image pushed as `sha-<head sha>`) and `.github/workflows/weekly.yml` (on `stable`) run it on the home runner (`deploy/README.md`, "Home runner"), in the exact image under test, with the production security context, on a host that keeps containers off private address ranges:
 
 ```sh
 docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=10g \

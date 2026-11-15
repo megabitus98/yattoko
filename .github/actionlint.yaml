@@ -1,0 +1,4 @@
+# actionlint: the home runner's custom label (deploy/README.md, "Home runner")
+self-hosted-runner:
+  labels:
+    - ytdlbot-regression

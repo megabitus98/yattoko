@@ -396,6 +396,8 @@
 
 ### Task 16: GitHub workflows, Dependabot, deployment example
 
+*Superseded in part by Task 17 (2026-11-15): `merge-and-promote.yml` and the Jenkins regression are gone; `ci.yml` is split into jobs.*
+
 **Files:**
 - Create: `.github/workflows/ci.yml`, `.github/workflows/merge-and-promote.yml`, `.github/dependabot.yml`, `deploy/kubernetes.example.yaml`, `deploy/README.md`
 - Test: `tests/repo/test_pipeline_files.py`
@@ -416,7 +418,7 @@
 
 - Create the private repository `megabitus98/ytdlbot`, disable Actions, push `main` (controller, after slice 1). Enable Actions after Task 16.
 - Create the bot in BotFather (disable groups), get `APP_ID`/`APP_HASH` from my.telegram.org, create the test bot and test chat; each owner sends `/start` to both bots.
-- Jenkins regression job and credentials (owner's explicit go for each credential), Kubernetes Secret/PVC/NetworkPolicy/router rule and Keel in the owner's private deployment repository (see the private deployment note).
+- The home runner (label `ytdlbot-regression`, registered to this repository only, internet only) and the test bot secrets under Actions and Dependabot (`deploy/README.md`; owner's explicit go for each credential), Kubernetes Secret/PVC/NetworkPolicy/router rule and Keel in the owner's private deployment repository (see the private deployment note). Jenkins is no longer used (Task 17).
 
 ## Carry-over from reviews (each item belongs to the task named; that task's implementer must do it and its reviewer must check it)
 
@@ -446,3 +448,15 @@
   - The Alpine image has no tz database, so APScheduler (only with `ENABLE_VIP`) resets the free quota at 00:00 UTC unless `TZ` is set and `tzdata` installed.
   - `PROXY_PIN` defaults to nothing; the deployment must set `PROXY_PIN=instagram=direct` (spec 6.7).
   - TikTok age-restricted posts need `tiktok.txt` cookies (login_required, as designed).
+
+### Task 17: Pipeline without Jenkins (2026-11-15, owner decision)
+
+Why: the first `ci.yml` built, tested and pushed in one job holding `packages: write`, so a malicious dependency release in a Dependabot PR could read the token from the runner's memory and push its own `stable`; the 15-minute `merge-and-promote` cron alone was about 2,900 billable minutes a month, above GitHub Free's included $12; and the Jenkins VM is reachable from the internet and holds work credentials.
+
+- `ci.yml`: jobs `unit` (read-only; `UV_MALWARE_CHECK=1`; saves the image as a one-day artifact), `scan` (read-only; `uv audit` of head and base locks for `x86_64-unknown-linux-musl`, Python 3.12; fails on added `<package> <id>` pairs), `push` (`packages: write`, `actions: write`, no checkout; loads `ytdlbot:runtime`, pushes `sha-<head sha>` unless it exists, deletes the artifact), `regression` (`[self-hosted, ytdlbot-regression]`, `packages: read`, no checkout, `--upload` when `TEST_BOT_TOKEN` is set), `merge` (Dependabot `uv` PRs; squash-merge when `behind_by == 0`, then `gh workflow run promote.yml`; else `@dependabot rebase`), `notify` (test bot message on failure).
+- `promote.yml`: push to `main` and `workflow_dispatch`; requires `unit`, `scan`, `push`, `regression` green on the tested head and the same tree; a commit from no PR is a notice, not a failure.
+- `weekly.yml`: regression on `stable`, full `uv audit` (fails on fixable), Grype `v0.121.3` by digest on the saved image (`--only-fixed --fail-on high`), drift (yt-dlp, curl-cffi, Dependabot PRs, `python:3.12-alpine` tag), heartbeat or test bot message.
+- `Dockerfile`: `UV_MALWARE_CHECK=1` on both `uv sync` lines (fails closed when OSV is unreachable, checked 2026-11-15 with uv 0.13.8).
+- `.github/actionlint.yaml` declares the runner label. `tests/repo/test_pipeline_files.py` pins the rules: workflow permissions `{}`, write tokens only in `ci.push`, `ci.merge`, `promote.promote` and none of them checks out code, `packages: write` only in `push` and `promote`, the home runner only for the two regression jobs with `packages: read` and no checkout, promote's check list equals the ci gates, the malware check on every sync, Grype pinned by digest.
+- Checked: actionlint 1.7.12 and zizmor 1.32.0 (`--persona auditor`: only the expected self-hosted runner, secrets without environments and job-name notes), the scan step run for real against a clean and a vulnerable lock, the image build with the malware check, the unit tests in the image.
+- Not checked until Actions is on: the jobs on GitHub's runners, whether Dependabot obeys an `@dependabot rebase` comment from `github-actions[bot]` (the weekly drift check reports a Dependabot PR open more than 3 days either way).
