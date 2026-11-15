@@ -74,7 +74,7 @@ def test_hook_abort_replies_too_large_without_retry(monkeypatch):
     # Review Focus 4 through start(): the stream outgrows the limit mid-download, so that job stops
     attempts = []
 
-    def growing_attempt(url, site, exit, opts, tmpdir):
+    def growing_attempt(url, site, exit, opts, tmpdir, **kwargs):
         attempts.append(url)
         hook = opts["progress_hooks"][0]
         hook({"status": "downloading", "downloaded_bytes": TG_NORMAL_MAX_SIZE + 1})
@@ -97,7 +97,7 @@ def test_oversized_result_retries_lower_then_refuses(monkeypatch):
     monkeypatch.setattr(base, "TG_NORMAL_MAX_SIZE", 100)
     formats = []
 
-    def oversized_attempt(url, site, exit, opts, tmpdir):
+    def oversized_attempt(url, site, exit, opts, tmpdir, **kwargs):
         formats.append(opts["format"])
         # yt-dlp would skip a file that is already there, so the retry must start from an empty dir
         assert list(tmpdir.iterdir()) == []
@@ -214,5 +214,8 @@ def test_heartbeat_starts_after_client(monkeypatch):
     monkeypatch.setattr(
         main, "start_heartbeat", lambda client: events.append("heartbeat")
     )
+    monkeypatch.setattr(
+        main, "check_impersonation", lambda client: events.append("impersonation")
+    )
     asyncio.run(main.serve(App()))
-    assert events == ["start", "heartbeat", "idle", "stop"]
+    assert events == ["start", "heartbeat", "impersonation", "idle", "stop"]

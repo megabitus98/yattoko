@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first)
+# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first), OwnerNotice table and claim_notice (one owner notice per site and kind a day)
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import (
     BigInteger,
     Column,
+    DateTime,
     Enum,
     ForeignKey,
     Integer,
+    String,
+    UniqueConstraint,
     create_engine,
     event,
 )
@@ -49,6 +53,17 @@ class Setting(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     user = relationship("User", back_populates="settings")
+
+
+class OwnerNotice(Base):
+    # when the owners were last told about a kind of failure on a site (utils/notify.py)
+    __tablename__ = "owner_notices"
+    __table_args__ = (UniqueConstraint("site", "kind"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site = Column(String(64), nullable=False)
+    kind = Column(String(32), nullable=False)
+    last_sent = Column(DateTime, nullable=False)
 
 
 def make_engine(dsn: str) -> Engine:
@@ -138,3 +153,20 @@ def init_user(uid: int) -> None:
     # one INSERT OR IGNORE: a select-then-insert lets two parallel first messages both insert
     with session_manager() as session:
         session.execute(sqlite_insert(User).values(user_id=uid).on_conflict_do_nothing())
+
+
+def claim_notice(site: str, kind: str, now: datetime) -> bool:
+    # True (and now recorded) when nothing went out for this pair in the last 24 h. One statement, so two
+    # jobs failing at once cannot both claim: insert, or move last_sent on only if it is a day old.
+    # Callers pass UTC; SQLite stores the time without its zone.
+    statement = (
+        sqlite_insert(OwnerNotice)
+        .values(site=site, kind=kind, last_sent=now)
+        .on_conflict_do_update(
+            index_elements=["site", "kind"],
+            set_={"last_sent": now},
+            where=OwnerNotice.last_sent <= now - timedelta(days=1),
+        )
+    )
+    with session_manager() as session:
+        return session.execute(statement).rowcount == 1

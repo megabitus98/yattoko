@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock, owner notice after a login_required or blocked reply
 
 import hashlib
 import json
@@ -42,7 +42,7 @@ from database.model import (
     get_sponsorblock_settings,
     get_vcodec_settings,
 )
-from engine.errors import RefusedContent, classify, site_name, user_message
+from engine.errors import OWNER_TOLD, RefusedContent, classify, site_name, tell_owners, user_message
 from engine.jobs import JobTimeout, TooLarge
 from utils import debounce, dir_size, netcheck
 
@@ -84,6 +84,8 @@ class BaseDownloader(ABC):
         os.makedirs(TMPFILE_PATH, exist_ok=True)
         self._tempdir = tempfile.TemporaryDirectory(prefix="ytdl-", dir=TMPFILE_PATH)
         self._bot_msg: Types.Message = bot_msg
+        # every exit a download went through, for the owner notice
+        self._exits_tried: list[str] = []
         # settings are saved per user (main.save_setting); in a group the chat ID is the group's
         self._quality = get_quality_settings(self._from_user)
         self._vcodec = get_vcodec_settings(self._from_user)
@@ -366,7 +368,11 @@ class BaseDownloader(ABC):
         except Exception as e:
             # one reply: the progress message becomes the error text; the traceback only goes to the log
             logging.exception("Download failed for %s", self._url)
-            self._bot_msg.edit_text(user_message(classify(e), site_name(self._url)))
+            kind = classify(e)
+            self._bot_msg.edit_text(user_message(kind, site_name(self._url)))
+            # after the reply: the reply says so, and a slow notice must not hold it up
+            if kind in OWNER_TOLD:
+                tell_owners(self._client, self._url, kind, str(e), self._exits_tried)
         finally:
             self._tempdir.cleanup()
 

@@ -2,19 +2,28 @@
 # coding: utf-8
 
 # ytdlbot - errors.py
-# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other, RefusedContent for playlists and live streams, links refused by the host check are unavailable
+# Modified 2026 by megabitus98 (fork): new file, download errors sorted into login_required/blocked/unavailable/other, RefusedContent for playlists and live streams, links refused by the host check are unavailable, tell_owners for the owner notices
 
 import re
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
 from yt_dlp.networking.exceptions import HTTPError, ProxyError
 from yt_dlp.utils import GeoRestrictedError
 
-from config import BotText
+from config import COOKIES_DIR, OWNERS, BotText
+from engine.cookies import cookie_options
+from engine.sites import site_for_url
 from utils.netcheck import BlockedHost
+from utils.notify import notify_owners
 
 Kind = Literal["login_required", "blocked", "unavailable", "other"]
+
+
+# the kinds whose reply says "The owner has been told"
+OWNER_TOLD: tuple[Kind, ...] = ("login_required", "blocked")
 
 
 class RefusedContent(Exception):
@@ -115,3 +124,10 @@ def site_name(url: str | None) -> str:
         if host == domain or host.endswith("." + domain):
             return name
     return "This site"
+
+
+def tell_owners(client, url: str | None, kind: str, details: str, exits: Iterable[str] = ()) -> None:
+    # The owner notice for a failed link, at most one per site and kind a day (utils/notify.py)
+    site = site_for_url(url or "")
+    cookies = bool(cookie_options(Path(COOKIES_DIR), site))
+    notify_owners(client, OWNERS, site, kind, details, cookies=cookies, exits=exits)

@@ -4,10 +4,11 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app()
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app(), owner notices (impersonation check at startup, login_required/blocked from the handlers), FloodWait retried by a timer instead of a sleeping worker, each owner messaged separately
 
 __author__ = "Benny <benny.think@gmail.com>"
 
+import asyncio
 import logging
 import os
 import re
@@ -66,11 +67,13 @@ from database.model import (
 )
 from engine import direct_entrance, youtube_entrance, special_download_entrance
 from engine.base import QUALITIES
-from engine.errors import classify, site_name, user_message
+from engine.errors import OWNER_TOLD, classify, site_name, tell_owners, user_message
 from engine.jobs import JobQueue
 from health import HEALTH_FILE, start_heartbeat
+from selfcheck import run_selfcheck
 from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
 from utils.access import GUARDS
+from utils.notify import notify_owners, send_to_owners
 
 # Every download runs here; handlers hand the job over and return, so queued jobs hold no kurigram worker.
 JOBS = JobQueue(MAX_PARALLEL_JOBS)
@@ -288,31 +291,48 @@ def submit_download(
         try:
             entrance(client, bot_msg, url)
         except pyrogram.errors.Flood as e:
-            flood_wait(client, message, e)
+            # JOBS is looked up when the timer fires
+            flood_wait(client, message, e, retry=lambda: JOBS.submit(job))
         except Exception as e:
-            reply_error(message, url, e)
+            reply_error(client, message, url, e)
             bot_msg.delete()
 
     if position := JOBS.submit(job):
         bot_msg.edit_text(BotText.queued.format(n=position))
 
 
-def flood_wait(client: Client, message: types.Message, e: pyrogram.errors.Flood) -> None:
-    f = BytesIO()
-    f.write(BotText.flood_file.encode())
-    f.name = BotText.flood_file_name
-    message.reply_document(f, caption=BotText.flood_wait.format(e.value))
-    f.close()
-    for owner_id in OWNERS:
-        client.send_message(owner_id, BotText.flood_wait.format(e.value))
-    time.sleep(e.value)
+def flood_wait(
+    client: Client,
+    message: types.Message,
+    e: pyrogram.errors.Flood,
+    retry: Callable[[], object] | None = None,
+) -> None:
+    # Telegram says how long to pause. The retry is scheduled, so no thread sleeps through the wait.
+    # FLOOD_SKIP_FAILED_WAIT and a bare Flood carry no number of seconds.
+    wait = e.value if isinstance(e.value, int) else 5
+    if retry is not None:
+        # first: the messages below are sent during the flood and may fail as well
+        timer = threading.Timer(wait, retry)
+        timer.daemon = True  # a pending retry does not keep a stopping bot alive
+        timer.start()
+    text = BotText.flood_wait.format(wait)
+    try:
+        f = BytesIO(BotText.flood_file.encode())
+        f.name = BotText.flood_file_name
+        message.reply_document(f, caption=text)
+    except Exception:
+        logging.exception("Could not tell the user to wait")
+    send_to_owners(client, OWNERS, text)
 
 
-def reply_error(message: types.Message, url: str | None, err: BaseException) -> None:
+def reply_error(client: Client, message: types.Message, url: str | None, err: BaseException) -> None:
     # for failures outside BaseDownloader.start(), which replies by itself
     # the traceback goes to the (redacted) log, never to the user
     logging.error("Download failed for %s", url, exc_info=err)
-    message.reply_text(user_message(classify(err), site_name(url)))
+    kind = classify(err)
+    message.reply_text(user_message(kind, site_name(url)))
+    if kind in OWNER_TOLD:
+        tell_owners(client, url, kind, str(err))
 
 
 def m3u8_blocked(url: str) -> bool:
@@ -349,9 +369,10 @@ def download_handler(client: Client, message: types.Message):
         submit_download(client, message, url, youtube_entrance, BotText.downloading)
         client.send_chat_action(chat_id, enums.ChatAction.UPLOAD_VIDEO)
     except pyrogram.errors.Flood as e:
+        # no retry from here: either the job is queued already, or there is none and the user sends again
         flood_wait(client, message, e)
     except Exception as e:
-        reply_error(message, url, e)
+        reply_error(client, message, url, e)
 
 
 # Callback data -> stored setting value. The handler regexes are built from these keys and anchored,
@@ -431,10 +452,19 @@ def create_app() -> Client:
     return app
 
 
+def check_impersonation(client: Client) -> None:
+    # Anonymous Instagram needs curl-cffi's browser impersonation, and yt-dlp says nothing without it
+    if not run_selfcheck()["impersonation"]:
+        logging.error("yt-dlp has no impersonation target: install curl-cffi")
+        notify_owners(client, OWNERS, "yt-dlp", "impersonation_missing", BotText.owner_no_impersonation)
+
+
 async def serve(app: Client) -> None:
     # Client.run(), with the heartbeat started once the client is up: get_me needs a started client
     await app.start()
     start_heartbeat(app)
+    # in a thread: on this loop kurigram's sync methods return coroutines instead of sending
+    await asyncio.to_thread(check_impersonation, app)
     await idle()
     await app.stop()
 

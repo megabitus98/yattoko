@@ -2,10 +2,11 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower, owner notice when the Instagram cookies stopped working, exits tried recorded
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,6 +15,7 @@ from yt_dlp.utils import sanitize_url
 
 from config import (
     AUDIO_FORMAT,
+    BotText,
     COOKIES_DIR,
     OWN_PUBLIC_IPS,
     PREFERRED_AUDIO_LANG,
@@ -21,8 +23,8 @@ from config import (
 )
 
 from engine.base import BaseDownloader
-from engine.cookies import cookie_options
-from engine.errors import RefusedContent
+from engine.cookies import cookie_options, instagram_session_present
+from engine.errors import RefusedContent, tell_owners
 from engine.proxy import ydl_proxy
 from engine.sites import site_for_url
 from utils import netcheck
@@ -86,7 +88,14 @@ def single_video_only(info: dict, incomplete: bool = False) -> None:
     return None
 
 
-def attempt(url: str, site: str, exit: str, opts: dict, tmpdir: Path) -> dict:
+def attempt(
+    url: str,
+    site: str,
+    exit: str,
+    opts: dict,
+    tmpdir: Path,
+    on_cookies_expired: Callable[[], None] | None = None,
+) -> dict:
     # One YoutubeDL per attempt: extraction and download through the same exit (YouTube media URLs
     # are tied to the extracting IP), and a fresh in-memory cookies copy for this instance only.
     params = opts | {
@@ -95,21 +104,29 @@ def attempt(url: str, site: str, exit: str, opts: dict, tmpdir: Path) -> dict:
         "match_filter": single_video_only,
         "outtmpl": (tmpdir / "%(title).70s.%(ext)s").as_posix(),
     }
-    with yt_dlp.YoutubeDL(params | cookie_options(Path(COOKIES_DIR), site)) as ydl:
-        # process=False: the raw result, so a channel's entries are never walked
-        info = ydl.extract_info(url, download=False, process=False)
-        # short links and redirects come back as a pointer; follow it (still nothing downloaded)
-        for _ in range(5):
-            if not info or info.get("_type") != "url":
-                break
-            info = ydl.extract_info(
-                sanitize_url(info["url"], scheme="https"), download=False, ie_key=info.get("ie_key"), process=False
-            )
-        if not info:
-            raise yt_dlp.utils.DownloadError("Nothing extracted")
-        if info.get("_type") in ("playlist", "multi_video") or _is_live(info):
-            raise RefusedContent()
-        return ydl.process_ie_result(info, download=True)
+    cookies = cookie_options(Path(COOKIES_DIR), site)
+    with yt_dlp.YoutubeDL(params | cookies) as ydl:
+        # yt-dlp's Instagram extractor drops sessionid from the jar when the cookies no longer work
+        session = bool(cookies) and site == "instagram" and instagram_session_present(ydl)
+        try:
+            # process=False: the raw result, so a channel's entries are never walked
+            info = ydl.extract_info(url, download=False, process=False)
+            # short links and redirects come back as a pointer; follow it (still nothing downloaded)
+            for _ in range(5):
+                if not info or info.get("_type") != "url":
+                    break
+                info = ydl.extract_info(
+                    sanitize_url(info["url"], scheme="https"), download=False, ie_key=info.get("ie_key"), process=False
+                )
+            if not info:
+                raise yt_dlp.utils.DownloadError("Nothing extracted")
+            if info.get("_type") in ("playlist", "multi_video") or _is_live(info):
+                raise RefusedContent()
+            return ydl.process_ie_result(info, download=True)
+        finally:
+            # failed or not, and before close() writes the jar to the scratch copy
+            if session and on_cookies_expired and not instagram_session_present(ydl):
+                on_cookies_expired()
 
 
 class YoutubeDownload(BaseDownloader):
@@ -189,7 +206,22 @@ class YoutubeDownload(BaseDownloader):
 
         # again before the attempt: the name may resolve differently than when the job was queued
         netcheck.check_url(self._url, OWN_PUBLIC_IPS)
-        attempt(self._url, site, YT_DLP_PROXY or "direct", ydl_opts, Path(self._tempdir.name))
+        exit = YT_DLP_PROXY or "direct"
+        self._exits_tried.append(exit)
+        attempt(
+            self._url,
+            site,
+            exit,
+            ydl_opts,
+            Path(self._tempdir.name),
+            on_cookies_expired=lambda: tell_owners(
+                self._client,
+                self._url,
+                "cookies_expired",
+                BotText.owner_cookies_expired.format(site=site),
+                self._exits_tried,
+            ),
+        )
         return list(Path(self._tempdir.name).glob("*"))
 
     def _start(self):

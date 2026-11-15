@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large, owner notice texts
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -77,6 +77,15 @@ class BotText:
     flood_file = "Your job will be done soon. Just wait!"
 
     flood_file_name = "Please wait.txt"
+
+    # to the owners (utils/notify.py); {details} is a redacted error excerpt
+    owner_notice = "[ytdlbot] {kind} on {site}\ncookies: {cookies}\nexits tried: {exits}\n{details}"
+
+    owner_cookies_expired = "yt-dlp dropped sessionid: the cookies in {site}.txt no longer work. Export fresh ones."
+
+    owner_no_impersonation = (
+        "yt-dlp has no impersonation target (curl-cffi missing or broken). Anonymous Instagram downloads fail."
+    )
 
     stats = (
         "\n\n⌬─────「 Stats 」─────⌬\n\n"

@@ -14,11 +14,17 @@ from fakes import FakeClient, fake_message
 from utils.redact import RedactingFormatter, redact
 
 PROXY = "http://u:secret@proxy.example:8080"
+# Neither contains the other, nor conftest's APP_HASH=test: each one is masked by its own rule only.
+TOKEN = "123456789:AAFakeBotTokenValue"
+HASH = "0123456789abcdef0123456789abcdef"
 
 
-def test_redact_token_and_proxy():
-    text = redact("bot 1:test via http://u:p@proxy.example:8080")
-    assert "1:test" not in text
+def test_redact_token_and_proxy(monkeypatch):
+    monkeypatch.setattr(config.config, "BOT_TOKEN", TOKEN)
+    monkeypatch.setattr(config.config, "APP_HASH", HASH)
+    text = redact(f"bot {TOKEN} hash {HASH} via http://u:p@proxy.example:8080")
+    assert "AAFakeBotTokenValue" not in text and "123456789:" not in text
+    assert "0123456789abcdef" not in text
     assert "u:p@" not in text
     assert "proxy.example:8080" in text
 
@@ -50,7 +56,7 @@ def test_root_logger_redacts():
     code = (
         "import logging, main\n"
         "try:\n"
-        f"    raise RuntimeError('token 1:test proxy {PROXY}')\n"
+        f"    raise RuntimeError('token {TOKEN} proxy {PROXY}')\n"
         "except RuntimeError:\n"
         "    logging.getLogger('any').exception('boom')\n"
     )
@@ -58,14 +64,14 @@ def test_root_logger_redacts():
     src = os.path.dirname(os.path.dirname(config.__file__))
     result = subprocess.run(
         [sys.executable, "-c", code],
-        env={**os.environ, "PYTHONPATH": src},
+        env={**os.environ, "PYTHONPATH": src, "BOT_TOKEN": TOKEN},
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
     assert "boom" in result.stderr and "Traceback" in result.stderr
-    assert "1:test" not in result.stderr
+    assert "AAFakeBotTokenValue" not in result.stderr
     assert "secret" not in result.stderr
 
 
