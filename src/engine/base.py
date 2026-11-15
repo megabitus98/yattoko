@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock, owner notice after a login_required or blocked reply, upstream's quota check and use restored behind ENABLE_VIP
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock, owner notice after a login_required or blocked reply, upstream's quota check and use restored behind ENABLE_VIP, file cache errors count as a miss and entries expire after CACHE_TTL
 
 import hashlib
 import json
@@ -23,6 +23,7 @@ from typing import final
 
 import ffmpeg
 import filetype
+import redis
 from pyrogram import enums, errors, types
 from tqdm import tqdm
 
@@ -51,6 +52,7 @@ from engine.jobs import JobTimeout, TooLarge
 from utils import debounce, dir_size, netcheck
 
 # highest first, as in /settings; an oversized file is downloaded once more one step lower
+CACHE_TTL = 30 * 24 * 3600  # seconds; a shared Redis without eviction must not keep file_ids forever
 QUALITIES = ("1440p", "1080p", "720p", "480p", "240p")
 
 
@@ -324,13 +326,26 @@ class BaseDownloader(ABC):
             "meta": json.dumps({k: v for k, v in meta.items() if k != "thumb"}, ensure_ascii=False),
         }
 
-        get_cache().hset(self._video_key, mapping=mapping)
+        self._set_video_cache(mapping)
         # change progress bar to done
         self._bot_msg.edit_text(BotText.done)
         return success
 
+    # The cache only saves a download: when Redis fails, the job goes on as a miss.
+    def _set_video_cache(self, mapping):
+        try:
+            cache = get_cache()
+            cache.hset(self._video_key, mapping=mapping)
+            cache.expire(self._video_key, CACHE_TTL)
+        except redis.RedisError as e:
+            logging.warning("File cache write failed: %s", type(e).__name__)
+
     def _get_video_cache(self):
-        return get_cache().hgetall(self._video_key)
+        try:
+            return get_cache().hgetall(self._video_key)
+        except redis.RedisError as e:
+            logging.warning("File cache read failed: %s", type(e).__name__)
+            return {}
 
     def _calc_video_key(self):
         # every setting that changes the file that is sent

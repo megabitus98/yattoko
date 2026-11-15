@@ -35,6 +35,8 @@ os.environ.update(
                 "M3U8_SUPPORT",
                 "TG_NORMAL_MAX_SIZE",
                 "REDIS_HOST",
+                "REDIS_PASSWORD",
+                "REDIS_DB",
                 "MAX_PARALLEL_JOBS",
                 "TMP_BUDGET",
                 "JOB_TIMEOUT",

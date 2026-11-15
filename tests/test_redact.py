@@ -32,6 +32,11 @@ def test_redact_token_and_proxy(monkeypatch):
     assert "abc123" not in cookies and "def456" not in cookies
 
 
+def test_redact_redis_password(monkeypatch):
+    monkeypatch.setattr(config.config, "REDIS_PASSWORD", "hunter2-redis-secret")
+    assert "hunter2-redis-secret" not in redact("AUTH hunter2-redis-secret failed")
+
+
 def test_redact_at_in_password():
     # split at the last @ of the authority, as urllib.parse does
     assert (
