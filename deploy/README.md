@@ -15,7 +15,7 @@
 
 ## Secrets
 
-The bot's settings come from the `ytdlbot-env` Secret (`BOT_TOKEN`, `APP_ID`, `APP_HASH`, `OWNER`, `AUTHORIZED_USER`, `PROXY_EXITS`, `PROXY_PIN`, `OWN_PUBLIC_IPS`; see `.env.example` for all of them). Set `PROXY_PIN=instagram=direct`: Instagram then never falls back to a proxy, so its login always comes from the same home address (the default pins nothing).
+The bot's settings come from the `ytdlbot-env` Secret (`BOT_TOKEN`, `APP_ID`, `APP_HASH`, `OWNER`, `AUTHORIZED_USER`, `PROXY_EXITS`, `PROXY_PIN`, `OWN_PUBLIC_IPS`; see `.env.example` for all of them). Set `PROXY_PIN=instagram=direct`, with `direct` also listed in `PROXY_EXITS` (for example `PROXY_EXITS=direct,http://proxy.example:8080`; the bot refuses to start when a pin names an exit that is not listed): Instagram then never falls back to a proxy, so its login always comes from the same home address (the default pins nothing). Set `ENABLE_FFMPEG=true` for the H.264 conversion of short VP9/AV1 videos.
 
 ```sh
 kubectl create secret generic ytdlbot-env --from-env-file=ytdlbot.env

@@ -43,6 +43,8 @@ def test_no_statuses_write():
 def test_ci_checks_out_head_sha():
     ci = load(CI)
     assert list(ci[True]) == ["pull_request"]  # PyYAML reads the `on` key as True
+    # the job id is the check name merge-and-promote waits for (check-runs?check_name=unit)
+    assert list(ci["jobs"]) == ["unit"]
     [job] = ci["jobs"].values()
     assert "github.event.pull_request.head.repo.full_name == github.repository" in job["if"]
     [checkout] = [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")]

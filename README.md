@@ -110,7 +110,7 @@ This list is written from the code at this fork's head, compared with Katze-942/
 - **Build.** uv with a lock file instead of PDM, Python 3.12, kurigram 2.2.27, yt-dlp with curl-cffi for browser impersonation. Alpine image pinned by digest, non-root user, caches and scratch under `/tmp` so the root filesystem can be read-only, `runtime` and `test` targets, and `python main.py --self-check`.
 - **Repository.** Donation and payment material, the upstream public bot links and images, the old workflows and Dependabot file, and the Redis and MySQL compose services are gone. A unit test suite lives in `tests/`. New workflows test every PR, and only a tested image reaches the `stable` tag; `deploy/` has a Kubernetes example and explains the pipeline.
 
-Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads. Restored from tgbot-collection/ytdlbot and off by default: VIP quota, Telegram payments, `/buy` and the daily free-quota reset (`ENABLE_VIP`), with the quota columns added to an existing database at startup, and the `RCLONE_PATH` and `ENABLE_FFMPEG` settings (read but unused, as upstream).
+Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads. Restored from tgbot-collection/ytdlbot and off by default: VIP quota, Telegram payments, `/buy` and the daily free-quota reset (`ENABLE_VIP`), with the quota columns added to an existing database at startup, and the `RCLONE_PATH` setting (read but unused, as upstream). Upstream's `ENABLE_FFMPEG` name now switches on the H.264 conversion (see the table above).
 
 ## License
 
