@@ -63,7 +63,7 @@ The regression has to download from a home connection: video sites often block t
 - Internet only: block the host from your LAN on the router or with a separate VLAN, and keep its containers off private addresses: `iptables` rules in the `DOCKER-USER` chain that drop the three RFC 1918 ranges, after a rule that accepts your DNS server if it sits on a private address. `DOCKER-USER` only sees traffic the host forwards; traffic from a container to the host itself (SSH, the Docker API on TCP) goes through `INPUT`, so also drop the Docker bridge networks there for everything but DNS.
 - It needs no secrets of its own: each job brings a read-only registry token and the test bot secrets, and removes its registry login when it ends.
 
-If the runner is offline, the regression job waits; GitHub cancels it after 24 hours and `notify` tells you. No update merges until you re-run it (the run's "Re-run failed jobs") with the runner back.
+If the runner is offline, the regression job waits; GitHub cancels it after 24 hours and `notify` tells you. No update merges until you re-run that run (Re-run jobs, on the PR's Checks tab) with the runner back; the image stays in the registry, so the regression can run again on its own.
 
 ### Before making the repository public
 

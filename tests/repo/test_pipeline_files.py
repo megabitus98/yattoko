@@ -62,8 +62,18 @@ def test_ci_checks_out_head_sha():
     ci = load(CI)
     assert list(ci[True]) == ["pull_request"]  # PyYAML reads the `on` key as True
     assert list(ci["jobs"]) == ["unit", "scan", "push", "regression", "merge", "cleanup", "notify"]
-    for job_id, job in ci["jobs"].items():
-        assert OWN_BRANCHES in job["if"], job_id
+    # each condition in full: a substring check would pass `<guard> || true`
+    own = OWN_BRANCHES
+    assert {job_id: job["if"].strip() for job_id, job in ci["jobs"].items()} == {
+        "unit": own,
+        "scan": own,
+        "push": own,
+        "regression": own,
+        "merge": f"{own} && github.event.pull_request.user.login == 'dependabot[bot]' && "
+        "startsWith(github.event.pull_request.head.ref, 'dependabot/uv/')",
+        "cleanup": f"always() && needs.push.result != 'failure' && {own}",
+        "notify": f"always() && {own} && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))",
+    }
     checkouts = {job_id: [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")] for job_id, job in ci["jobs"].items()}
     assert {job_id for job_id, found in checkouts.items() if found} == {"unit", "scan"}
     for job_id in ("unit", "scan"):
@@ -95,7 +105,8 @@ def test_write_tokens_never_run_pr_code():
     assert set(writers) == {("ci.yml", "push"), ("ci.yml", "merge"), ("ci.yml", "cleanup"), ("promote.yml", "promote")}
     for key, job in writers.items():
         assert [s["uses"] for s in job["steps"] if "uses" in s] == [], key
-        assert [s.get("name") for s in job["steps"] if "docker run" in s.get("run", "")] == [], key
+        starts_container = re.compile(r"\bdocker\s+(container\s+)?(run|create|start|exec)\b")
+        assert [s.get("name") for s in job["steps"] if starts_container.search(s.get("run", ""))] == [], key
 
 
 def test_notify_reports_cancelled_runs():

@@ -61,14 +61,18 @@ jobs:
           }
           fail() { echo "::error::$1"; exit 1; }
 
+          tree_of() { gh api "repos/$GH_REPO/git/commits/$1" --jq .tree.sha; }
           main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
           : "${main_sha:?}"
+          main_tree=$(tree_of "$main_sha")
+          head_sha=""
           if [ -n "$given_head" ]; then
             [[ "$given_head" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha '$given_head' is not a commit SHA"
-            head_sha=$given_head # still has to be green and have main's tree, below
-          else
+            # main may have moved on since the merge that passed this head; then look main up instead
+            [ "$(tree_of "$given_head")" = "$main_tree" ] && head_sha=$given_head
+          fi
+          if [ -z "$head_sha" ]; then
             # GitHub can take a moment to link a brand-new commit to its PR
-            head_sha=""
             for attempt in 1 2 3 4 5 6; do
               head_sha=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
                 --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0].head.sha // empty")
@@ -81,8 +85,7 @@ jobs:
             exit 0
           fi
           green "$head_sha" || fail "the tested head $head_sha of main $main_sha is not green; nothing promoted"
-          main_tree=$(gh api "repos/$GH_REPO/git/commits/$main_sha" --jq .tree.sha)
-          head_tree=$(gh api "repos/$GH_REPO/git/commits/$head_sha" --jq .tree.sha)
+          head_tree=$(tree_of "$head_sha")
           [ -n "$main_tree" ] && [ "$main_tree" = "$head_tree" ] \
             || fail "main $main_sha and the tested head $head_sha have different trees (merged while behind main?); nothing promoted"
 
@@ -106,7 +109,7 @@ jobs:
           echo "Promoted $digest as stable and $release"
 
       - name: Tell the owner
-        if: failure()
+        if: failure() || cancelled()
         env:
           TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
           TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}

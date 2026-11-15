@@ -162,10 +162,8 @@ jobs:
           [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo "::error::no image artifact in this run"; exit 1; }
           mkdir -p "$RUNNER_TEMP/image"
           gh api "repos/$GH_REPO/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/image.zip"
-          if [[ "$artifact_digest" == sha256:* ]]; then
-            [ "sha256:$(sha256sum "$RUNNER_TEMP/image.zip" | cut -d' ' -f1)" = "$artifact_digest" ] \
-              || { echo "::error::the image artifact does not match its upload digest"; exit 1; }
-          fi
+          [ "sha256:$(sha256sum "$RUNNER_TEMP/image.zip" | cut -d' ' -f1)" = "$artifact_digest" ] \
+            || { echo "::error::the image artifact does not match its upload digest ($artifact_digest)"; exit 1; }
           unzip -q "$RUNNER_TEMP/image.zip" ytdlbot-image.tar.gz -d "$RUNNER_TEMP/image"
           docker load -i "$RUNNER_TEMP/image/ytdlbot-image.tar.gz"
           docker tag ytdlbot:runtime "$image:sha-$head_sha"
@@ -255,6 +253,12 @@ jobs:
     steps:
       - name: Merge, or ask for a rebase
         run: |
+          # Dependabot may have closed this PR for a newer one while this run was going
+          pr_state=$(gh api "repos/$GH_REPO/pulls/$pr_number" --jq .state)
+          if [ "$pr_state" != open ]; then
+            echo "::notice::#$pr_number is $pr_state; nothing to merge"
+            exit 0
+          fi
           main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
           : "${main_sha:?}"
           behind_by=$(gh api "repos/$GH_REPO/compare/$main_sha...$head_sha" --jq .behind_by)
@@ -272,7 +276,8 @@ jobs:
 
   cleanup:
     needs: [unit, push]
-    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    # after a failed push the artifact stays (one day) so "Re-run failed jobs" can push it again
+    if: always() && needs.push.result != 'failure' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     permissions:
       actions: write # delete the image artifact
@@ -282,9 +287,11 @@ jobs:
     steps:
       - name: Delete the image artifact
         run: |
-          # every copy of it in this run (a re-run of unit uploads another), or none
-          for artifact_id in $(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
-              --jq '.artifacts[] | select(.name == "ytdlbot-image") | .id'); do
+          # every copy of it in this run (a re-run of unit uploads another), or none; the listing is its
+          # own command so that a failing call fails the job
+          artifact_ids=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "ytdlbot-image") | .id')
+          for artifact_id in $artifact_ids; do
             gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$artifact_id"
           done
 
@@ -306,10 +313,11 @@ jobs:
     steps:
       - name: Tell the owner
         run: |
-          # a run cancelled because the PR got a new head is not news; the new head's run reports
-          current_head=$(gh api "repos/$GH_REPO/pulls/$pr_number" --jq .head.sha)
-          if [ "$current_head" != "$head_sha" ]; then
-            echo "superseded by $current_head, not reported"
+          # a run replaced by a newer head reports nothing (the new head's run does), nor does a closed PR
+          pr_info=$(gh api "repos/$GH_REPO/pulls/$pr_number" --jq '"\(.state) \(.head.sha)"')
+          read -r pr_state current_head <<< "$pr_info"
+          if [ "$pr_state" != open ] || [ "$current_head" != "$head_sha" ]; then
+            echo "PR is $pr_state at $current_head, this run was for $head_sha: not reported"
             exit 0
           fi
           if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
