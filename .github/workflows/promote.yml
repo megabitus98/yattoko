@@ -2,8 +2,8 @@
 # ci.yml's merge job starts it (a merge made with GITHUB_TOKEN starts no push workflow). main's newest
 # commit goes to `stable` only as the exact image its PR head was tested as: unit, scan, push and
 # regression all green on that head, and the same tree. A commit that came from no PR (a direct push)
-# promotes nothing and ships with the next tested update. A PR merge that does not match fails the run,
-# which is how the owner hears about it.
+# promotes nothing and ships with the next tested update. A PR merge that does not match fails the run
+# and the owner gets a message through the test bot (GitHub tells only whoever started a run, often a bot).
 # Modified 2026 by megabitus98 (fork): new workflow
 
 name: promote
@@ -12,6 +12,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      head_sha:
+        description: "The tested PR head that main came from (ci.yml's merge job passes it)"
+        required: false
+        type: string
 
 permissions: {}
 
@@ -36,18 +41,20 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       image: ghcr.io/${{ github.repository }}
+      given_head: ${{ inputs.head_sha }}
     steps:
       - name: Promote the tested image
         run: |
-          # green <sha>: every ci job the release depends on succeeded on that commit (each a check run;
-          # the latest run of each); pending, skipped or missing is not green
+          # green <sha>: every ci job the release depends on succeeded on that commit: for each check
+          # name, the most recently started run of it (a re-run or a later ci run on the same head
+          # replaces an older result); pending, skipped or missing is not green
           green() {
-            local check_name conclusions
+            local check_name conclusion
             for check_name in unit scan push regression; do
-              conclusions=$(gh api "repos/$GH_REPO/commits/$1/check-runs?check_name=$check_name" \
-                --jq '[.check_runs[] | select(.app.slug == "github-actions") | .conclusion] | unique | join(",")')
-              if [ "$conclusions" != success ]; then
-                echo "$check_name on $1: ${conclusions:-missing}"
+              conclusion=$(gh api "repos/$GH_REPO/commits/$1/check-runs?check_name=$check_name&filter=all&per_page=100" \
+                --jq '[.check_runs[] | select(.app.slug == "github-actions")] | sort_by(.started_at) | last | .conclusion // empty')
+              if [ "$conclusion" != success ]; then
+                echo "$check_name on $1: ${conclusion:-missing}"
                 return 1
               fi
             done
@@ -56,8 +63,19 @@ jobs:
 
           main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
           : "${main_sha:?}"
-          head_sha=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
-            --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0].head.sha // empty")
+          if [ -n "$given_head" ]; then
+            [[ "$given_head" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha '$given_head' is not a commit SHA"
+            head_sha=$given_head # still has to be green and have main's tree, below
+          else
+            # GitHub can take a moment to link a brand-new commit to its PR
+            head_sha=""
+            for attempt in 1 2 3 4 5 6; do
+              head_sha=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
+                --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0].head.sha // empty")
+              [ -n "$head_sha" ] && break
+              [ "$attempt" = 6 ] || sleep 10
+            done
+          fi
           if [ -z "$head_sha" ]; then
             echo "::notice::main $main_sha came from no pull request; stable stays as it is and this commit ships with the next tested update"
             exit 0
@@ -86,3 +104,18 @@ jobs:
           [ "$stable" = "$digest" ] || fail "stable is $stable after the copy, not the tested $digest"
           docker logout ghcr.io
           echo "Promoted $digest as stable and $release"
+
+      - name: Tell the owner
+        if: failure()
+        env:
+          TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
+          TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
+          text: "ytdlbot: promote failed, stable did not move. ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
+            echo "::error::no test bot secrets: nobody is told about this failure"
+            exit 1
+          fi
+          # the token and the chat go through curl's config on stdin, not the command line
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\n' "$TEST_BOT_TOKEN" "$TEST_CHAT_ID" |
+            curl -fsS -K - --data-urlencode "text=$text" -o /dev/null

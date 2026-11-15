@@ -1,7 +1,7 @@
 # Weekly look at what is deployed (spec 6.14): the real-download regression on `stable` (the home runner),
 # then on a GitHub runner the full uv audit of main's lock, Grype on the stable image's Alpine and other
-# packages, and a drift check (yt-dlp or curl-cffi more than 3 days behind PyPI, a Dependabot PR open for
-# more than 3 days, a newer python:3.12-alpine base). Problems reach the owner through the test bot; a clean week pings HEARTBEAT_URL (a
+# packages, and a drift check (yt-dlp more than 3 days or curl-cffi more than 5 days behind PyPI, a
+# Dependabot PR open for more than 3 days, a newer python:3.12-alpine base). Problems reach the owner through the test bot; a clean week pings HEARTBEAT_URL (a
 # dead-man's switch, optional) so a week with no run at all is noticed too.
 # Modified 2026 by megabitus98 (fork): new workflow
 
@@ -49,10 +49,14 @@ jobs:
           docker logout ghcr.io
           echo "stable is $(docker image inspect "$image:stable" --format '{{index .RepoDigests 0}}')" >> "$GITHUB_STEP_SUMMARY"
           upload=()
-          if [ -n "$TEST_BOT_TOKEN" ]; then
+          missing=$(for name in TEST_BOT_TOKEN TEST_CHAT_ID APP_ID APP_HASH; do [ -n "${!name}" ] || printf '%s ' "$name"; done)
+          if [ -z "$missing" ]; then
             upload=(--upload)
-          else
+          elif [ "$missing" = "TEST_BOT_TOKEN TEST_CHAT_ID APP_ID APP_HASH " ]; then
             echo "::warning::no test bot secrets: downloads only, the upload was not checked"
+          else
+            echo "::error::test bot secrets incomplete, missing: $missing(APP_ID and APP_HASH come from TEST_APP_ID and TEST_APP_HASH)"
+            exit 1
           fi
           exit_code=0
           docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=10g \
@@ -121,32 +125,46 @@ jobs:
       - name: Drift
         if: ${{ !cancelled() }}
         run: |
+          # every check records its problem and the step goes on, so one failure does not hide another
           problems=()
-          three_days_ago=$(date -u -d '3 days ago' +%s)
-          labels=$(docker image inspect "$image:stable" --format '{{json .Config.Labels}}')
-          for package in yt-dlp curl-cffi; do
+          now=$(date -u +%s)
+          labels=$(docker image inspect "$image:stable" --format '{{json .Config.Labels}}') || labels='{}'
+          # yt-dlp has no Dependabot cooldown (one day is enough to merge it); curl-cffi waits 3 days in the
+          # grouped PR, so it gets 5
+          for check in yt-dlp:3 curl-cffi:5; do
+            package=${check%%:*}
+            max_days=${check##*:}
             running=$(jq -r --arg key "io.ytdlbot.$package" '.[$key] // "unknown"' <<< "$labels")
-            pypi=$(curl -fsSL "https://pypi.org/pypi/$package/json")
+            if ! pypi=$(curl -fsSL "https://pypi.org/pypi/$package/json"); then
+              problems+=("could not read PyPI for $package")
+              continue
+            fi
             latest=$(jq -r .info.version <<< "$pypi")
-            uploaded=$(jq -r '[.urls[].upload_time_iso_8601] | min' <<< "$pypi")
-            if [ "$running" != "$latest" ] && [ "$(date -u -d "$uploaded" +%s)" -lt "$three_days_ago" ]; then
+            uploaded=$(jq -r '[.urls[].upload_time_iso_8601] | min // empty' <<< "$pypi")
+            if [ -z "$uploaded" ]; then
+              problems+=("PyPI lists no files for $package $latest")
+            elif [ "$running" != "$latest" ] && [ $(( now - $(date -u -d "$uploaded" +%s) )) -gt $(( max_days * 86400 )) ]; then
               problems+=("stable runs $package $running; PyPI has had $latest since ${uploaded%%T*}")
             fi
           done
           # a newer Alpine for Python 3.12 is a manual PR (it changes deno and ffmpeg), so only report it
           base_tag=$(sed -n 's/^FROM python:\(3\.12-alpine3\.[0-9]*\)@.*/\1/p' Dockerfile)
           newest_tag=$(curl -fsSL "https://hub.docker.com/v2/namespaces/library/repositories/python/tags?name=3.12-alpine3&page_size=100" \
-            | jq -r '.results[].name' | grep -E '^3\.12-alpine3\.[0-9]+$' | sort -V | tail -1)
+            | jq -r '.results[].name' | grep -E '^3\.12-alpine3\.[0-9]+$' | sort -V | tail -1) || newest_tag=""
           if [ -z "$base_tag" ] || [ -z "$newest_tag" ]; then
             problems+=("could not compare the base image tag (Dockerfile: '${base_tag}', Docker Hub: '${newest_tag}')")
           elif [ "$newest_tag" != "$base_tag" ] && [ "$(printf '%s\n%s\n' "$base_tag" "$newest_tag" | sort -V | tail -1)" = "$newest_tag" ]; then
             problems+=("python:$newest_tag exists; the Dockerfile uses python:$base_tag")
           fi
           cutoff=$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)
-          while read -r old_pr; do
-            [ -n "$old_pr" ] && problems+=("Dependabot PR open for more than 3 days: $old_pr")
-          done < <(gh pr list --app dependabot --state open --json number,title,createdAt \
-            --jq ".[] | select(.createdAt < \"$cutoff\") | \"#\(.number) \(.title)\"")
+          if old_prs=$(gh pr list --app dependabot --state open --json number,title,createdAt \
+              --jq ".[] | select(.createdAt < \"$cutoff\") | \"#\(.number) \(.title)\""); then
+            while read -r old_pr; do
+              [ -n "$old_pr" ] && problems+=("Dependabot PR open for more than 3 days: $old_pr")
+            done <<< "$old_prs"
+          else
+            problems+=("could not list the open Dependabot PRs")
+          fi
           if [ "${#problems[@]}" -gt 0 ]; then
             printf '%s\n' "${problems[@]}" >> "$GITHUB_STEP_SUMMARY"
             printf '::error::%s\n' "${problems[@]}"
@@ -175,9 +193,9 @@ jobs:
             exit 0
           fi
           if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
-            echo "::warning::no test bot secrets: only GitHub's own notice reports this week's problems"
-            exit 0
+            echo "::error::no test bot secrets: only GitHub's own notice (to whoever last changed the schedule) reports this week's problems"
+            exit 1
           fi
           text="ytdlbot weekly: regression $regression_result, checks $checks_result. $run_url"
-          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TEST_BOT_TOKEN" |
-            curl -fsS -K - --data-urlencode "chat_id=$TEST_CHAT_ID" --data-urlencode "text=$text" -o /dev/null
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\n' "$TEST_BOT_TOKEN" "$TEST_CHAT_ID" |
+            curl -fsS -K - --data-urlencode "text=$text" -o /dev/null

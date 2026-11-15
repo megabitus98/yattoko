@@ -53,10 +53,15 @@ def checks_out(job):
     return any(s.get("uses", "").startswith("actions/checkout@") for s in job.get("steps", []))
 
 
+def runs_on(job):
+    value = job["runs-on"]
+    return value if isinstance(value, list) else [value]
+
+
 def test_ci_checks_out_head_sha():
     ci = load(CI)
     assert list(ci[True]) == ["pull_request"]  # PyYAML reads the `on` key as True
-    assert list(ci["jobs"]) == ["unit", "scan", "push", "regression", "merge", "notify"]
+    assert list(ci["jobs"]) == ["unit", "scan", "push", "regression", "merge", "cleanup", "notify"]
     for job_id, job in ci["jobs"].items():
         assert OWN_BRANCHES in job["if"], job_id
     checkouts = {job_id: [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")] for job_id, job in ci["jobs"].items()}
@@ -78,11 +83,26 @@ def test_permissions_per_job():
         assert "permissions" in job, (name, job_id)
 
 
-def test_write_tokens_never_run_checked_out_code():
-    # a job that can write anything checks nothing out, so no code from a PR runs next to the token
+def test_job_ids_are_the_check_names():
+    # promote.yml asks for check runs by job id; a `name:` would rename the check and block every promote
+    assert [(name, job_id) for name, job_id, job in jobs() if "name" in job] == []
+
+
+def test_write_tokens_never_run_pr_code():
+    # A job that can write anything runs no action and nothing from the image: a PR run uses the PR's own
+    # workflow file, so a Dependabot GitHub Actions PR picks the action versions of its own run.
     writers = {(name, job_id): job for name, job_id, job in jobs() if "write" in job["permissions"].values()}
-    assert set(writers) == {("ci.yml", "push"), ("ci.yml", "merge"), ("promote.yml", "promote")}
-    assert [key for key, job in writers.items() if checks_out(job)] == []
+    assert set(writers) == {("ci.yml", "push"), ("ci.yml", "merge"), ("ci.yml", "cleanup"), ("promote.yml", "promote")}
+    for key, job in writers.items():
+        assert [s["uses"] for s in job["steps"] if "uses" in s] == [], key
+        assert [s.get("name") for s in job["steps"] if "docker run" in s.get("run", "")] == [], key
+
+
+def test_notify_reports_cancelled_runs():
+    # an offline home runner ends in a cancel after 24 hours, not a failure
+    notify = load(CI)["jobs"]["notify"]
+    assert "contains(needs.*.result, 'cancelled')" in notify["if"]
+    assert set(notify["needs"]) == set(load(CI)["jobs"]) - {"notify"}
 
 
 def test_packages_write_only_push_and_promote():
@@ -93,12 +113,15 @@ def test_packages_write_only_push_and_promote():
 
 
 def test_home_runner_only_runs_the_regression():
-    home = {(name, job_id): job for name, job_id, job in jobs() if "self-hosted" in job["runs-on"]}
+    home = {(name, job_id): job for name, job_id, job in jobs() if set(HOME_RUNNER) & set(runs_on(job))}
     assert set(home) == {("ci.yml", "regression"), ("weekly.yml", "regression")}
     for key, job in home.items():
         assert job["runs-on"] == HOME_RUNNER, key
         assert job["permissions"] == {"packages": "read"}, key
         assert not checks_out(job), key
+    # everything else on GitHub's runners
+    others = {(name, job_id): job["runs-on"] for name, job_id, job in jobs() if (name, job_id) not in home}
+    assert {key: label for key, label in others.items() if label != "ubuntu-24.04"} == {}
 
 
 def test_merge_only_dependabot_uv():
@@ -120,7 +143,7 @@ def test_malware_check_on_every_sync():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     syncs = [line for line in dockerfile.splitlines() if "uv sync" in line]
     assert len(syncs) == 2
-    assert [line for line in syncs if "UV_MALWARE_CHECK=1 uv sync" not in line] == []
+    assert [line for line in syncs if not re.fullmatch(r"\s*UV_MALWARE_CHECK=1 uv sync --locked( --no-dev)?", line)] == []
     assert load(CI)["jobs"]["unit"]["env"]["UV_MALWARE_CHECK"] == "1"
 
 

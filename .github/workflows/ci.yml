@@ -6,8 +6,11 @@
 #   push        GitHub runner, packages: write, no checkout: loads that image, pushes it as sha-<head sha>
 #   regression  the home runner, read-only: real downloads in the pushed image (src/regression/README.md)
 #   merge       GitHub runner, Dependabot uv PRs only: squash-merges a green PR level with main, starts promote
-#   notify      GitHub runner: tells the owner through the test bot when a job failed
-# The job ids are the check names promote.yml requires. Nothing is built on push to main.
+#   cleanup     GitHub runner: deletes the image artifact, whatever happened
+#   notify      GitHub runner: tells the owner through the test bot when a job failed or was cancelled
+# A job with a write token runs no action (`uses:`) and nothing from the image: a PR, Dependabot's
+# github-actions updates included, chooses the action versions of its own run. The job ids are the
+# check names promote.yml requires; no job has a `name:`. Nothing is built on push to main.
 # Modified 2026 by megabitus98 (fork): new workflow (spec 6.14)
 
 name: ci
@@ -77,9 +80,10 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          name: ytdlbot-image
           path: ${{ runner.temp }}/ytdlbot-image.tar.gz
-          archive: false # one file as it is; the artifact is named after it
-          retention-days: 1 # push deletes it sooner; the plan's artifact storage is small
+          compression-level: 0 # already gzipped
+          retention-days: 1 # cleanup deletes it sooner; the plan's artifact storage is small
           if-no-files-found: error
 
   scan:
@@ -142,20 +146,27 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       packages: write # push sha-<head sha>
-      actions: write # delete the image artifact once it is pushed
+      actions: read # fetch the image artifact
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      # No checkout: nothing from the PR runs here. The archive is loaded, never run, and only the one tag
-      # computed here is pushed, whatever else the archive names.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: ytdlbot-image.tar.gz
-          path: ${{ runner.temp }}/image
-
+      # No checkout and no action: nothing chosen by the PR runs here. The archive is fetched with the
+      # runner's own gh, checked against the digest GitHub recorded at upload, loaded (never run), and
+      # only the one tag computed here is pushed, whatever else the archive names.
       - name: Push the tested image
         run: |
+          artifact=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '[.artifacts[] | select(.name == "ytdlbot-image")] | sort_by(.created_at) | last | "\(.id) \(.digest)"')
+          read -r artifact_id artifact_digest <<< "$artifact"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo "::error::no image artifact in this run"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/image"
+          gh api "repos/$GH_REPO/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/image.zip"
+          if [[ "$artifact_digest" == sha256:* ]]; then
+            [ "sha256:$(sha256sum "$RUNNER_TEMP/image.zip" | cut -d' ' -f1)" = "$artifact_digest" ] \
+              || { echo "::error::the image artifact does not match its upload digest"; exit 1; }
+          fi
+          unzip -q "$RUNNER_TEMP/image.zip" ytdlbot-image.tar.gz -d "$RUNNER_TEMP/image"
           docker load -i "$RUNNER_TEMP/image/ytdlbot-image.tar.gz"
           docker tag ytdlbot:runtime "$image:sha-$head_sha"
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
@@ -166,12 +177,6 @@ jobs:
             docker push "$image:sha-$head_sha"
           fi
           docker logout ghcr.io
-
-      - name: Delete the image artifact
-        run: |
-          artifact_id=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name == "ytdlbot-image.tar.gz") | .id')
-          [ -n "$artifact_id" ] && gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$artifact_id"
 
   regression:
     needs: push
@@ -197,10 +202,14 @@ jobs:
           docker pull "$image:sha-$head_sha"
           docker logout ghcr.io
           upload=()
-          if [ -n "$TEST_BOT_TOKEN" ]; then
+          missing=$(for name in TEST_BOT_TOKEN TEST_CHAT_ID APP_ID APP_HASH; do [ -n "${!name}" ] || printf '%s ' "$name"; done)
+          if [ -z "$missing" ]; then
             upload=(--upload)
-          else
+          elif [ "$missing" = "TEST_BOT_TOKEN TEST_CHAT_ID APP_ID APP_HASH " ]; then
             echo "::warning::no test bot secrets: downloads only, the upload was not checked"
+          else
+            echo "::error::test bot secrets incomplete, missing: $missing(APP_ID and APP_HASH come from TEST_APP_ID and TEST_APP_HASH; Dependabot's runs read the Dependabot secrets)"
+            exit 1
           fi
           # the production security context; the runner host keeps containers off private addresses
           exit_code=0
@@ -238,6 +247,7 @@ jobs:
     concurrency:
       group: merge # one merge decision at a time, each against the main it just read
       cancel-in-progress: false
+      queue: max # the default keeps one waiting job and cancels the one before it
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -251,7 +261,8 @@ jobs:
           if [ "$behind_by" = 0 ]; then
             # main is the tested head's base, so the squash commit has exactly the tested tree
             gh pr merge "$pr_number" --squash --match-head-commit "$head_sha"
-            gh workflow run promote.yml --ref main
+            # the tested head goes along, so promote need not find the brand-new commit's PR
+            gh workflow run promote.yml --ref main -f head_sha="$head_sha"
             echo "Merged #$pr_number and started promote"
           else
             # merged now, main would hold a tree nobody tested; the rebased head runs this workflow again
@@ -259,22 +270,53 @@ jobs:
             echo "::notice::#$pr_number is $behind_by commit(s) behind main; asked Dependabot to rebase"
           fi
 
-  notify:
-    needs: [unit, scan, push, regression, merge]
-    if: failure() && github.event.pull_request.head.repo.full_name == github.repository
+  cleanup:
+    needs: [unit, push]
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    permissions: {}
+    permissions:
+      actions: write # delete the image artifact
     env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete the image artifact
+        run: |
+          # every copy of it in this run (a re-run of unit uploads another), or none
+          for artifact_id in $(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
+              --jq '.artifacts[] | select(.name == "ytdlbot-image") | .id'); do
+            gh api -X DELETE "repos/$GH_REPO/actions/artifacts/$artifact_id"
+          done
+
+  notify:
+    needs: [unit, scan, push, regression, merge, cleanup]
+    if: >-
+      always() && github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read # is this run's head still the PR's head?
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
       TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
       TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
-      text: "ytdlbot: CI failed on PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }}). ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      text: "ytdlbot: CI failed or was cancelled on PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }}). ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
     steps:
       - name: Tell the owner
         run: |
-          if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
-            echo "::warning::no test bot secrets: only GitHub's own notice reports this failure"
+          # a run cancelled because the PR got a new head is not news; the new head's run reports
+          current_head=$(gh api "repos/$GH_REPO/pulls/$pr_number" --jq .head.sha)
+          if [ "$current_head" != "$head_sha" ]; then
+            echo "superseded by $current_head, not reported"
             exit 0
           fi
-          # the token goes through curl's config on stdin, not the command line
-          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TEST_BOT_TOKEN" |
-            curl -fsS -K - --data-urlencode "chat_id=$TEST_CHAT_ID" --data-urlencode "text=$text" -o /dev/null
+          if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
+            # GitHub notifies whoever started a run, and Dependabot's runs were started by a bot
+            echo "::error::no test bot secrets: nobody is told about this failure"
+            exit 1
+          fi
+          # the token and the chat go through curl's config on stdin, not the command line
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\n' "$TEST_BOT_TOKEN" "$TEST_CHAT_ID" |
+            curl -fsS -K - --data-urlencode "text=$text" -o /dev/null

@@ -6,7 +6,7 @@ Every run uses the same home IP as the production bot and spends its reputation 
 
 ## How the pipeline runs it
 
-The `regression` jobs in `.github/workflows/ci.yml` (every PR, on the image pushed as `sha-<head sha>`) and `.github/workflows/weekly.yml` (on `stable`) run it on the home runner (`deploy/README.md`, "Home runner"), in the exact image under test, with the production security context, on a host that keeps containers off private address ranges:
+The `regression` jobs in `.github/workflows/ci.yml` (every PR, on the image pushed as `sha-<head sha>`) and `.github/workflows/weekly.yml` (on `stable`) run it on the home runner (`deploy/README.md`, "Home runner"), in the exact image under test, with the production security context, on a host that keeps containers off private address ranges and off the host itself:
 
 ```sh
 docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:size=10g \

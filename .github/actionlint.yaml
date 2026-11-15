@@ -2,3 +2,8 @@
 self-hosted-runner:
   labels:
     - ytdlbot-regression
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      # `concurrency.queue` (GitHub's workflow syntax docs) is newer than actionlint 1.7.12
+      - 'unexpected key "queue" for "concurrency" section'
