@@ -1,0 +1,34 @@
+# Modified 2026 by megabitus98 (fork): new file (spec 6.14): uv daily with yt-dlp alone and uncooled,
+# docker weekly without Python minor or major bumps, github-actions weekly and grouped.
+# merge-and-promote merges only the uv PRs; docker and github-actions PRs wait for the owner.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: daily
+    # yt-dlp is its own PR at once (site fixes are urgent); everything else waits 3 days, in one PR
+    cooldown:
+      default-days: 3
+      exclude: ["yt-dlp"]
+    groups:
+      python-deps:
+        patterns: ["*"]
+        exclude-patterns: ["yt-dlp"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # a new Python minor would break requires-python; Alpine bumps are a manual PR
+      - dependency-name: python
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

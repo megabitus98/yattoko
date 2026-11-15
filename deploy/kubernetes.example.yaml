@@ -1,0 +1,163 @@
+# Example deployment (spec 6.15). Placeholders only: see deploy/README.md before applying.
+# Modified 2026 by megabitus98 (fork): new file
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ytdlbot-data
+spec:
+  # SQLite (WAL) and the Telegram session: block storage, never NFS or SMB
+  # storageClassName: <a block-storage class>
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ytdlbot
+  labels:
+    app: ytdlbot
+  annotations:
+    # Keel polls `stable` and pulls the new digest when merge-and-promote moves the tag
+    keel.sh/policy: "force"
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: "poll"
+spec:
+  replicas: 1 # SQLite and the session file must never be shared by two pods
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ytdlbot
+  template:
+    metadata:
+      labels:
+        app: ytdlbot
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-pull # while the package is private; Keel polls with it too
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001 # lets uid 10001 write the volume
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ytdlbot
+          image: ghcr.io/megabitus98/ytdlbot:stable
+          imagePullPolicy: Always # a moved tag must really pull the new digest
+          # BOT_TOKEN, APP_ID, APP_HASH, OWNER, AUTHORIZED_USER, PROXY_EXITS, PROXY_PIN, OWN_PUBLIC_IPS
+          envFrom:
+            - secretRef:
+                name: ytdlbot-env
+          env:
+            - name: DB_DSN
+              value: "sqlite:////data/ytdlbot.db"
+            - name: TMPFILE_PATH
+              value: "/tmp/ytdlbot"
+            - name: HOME
+              value: "/tmp/home"
+            - name: XDG_CACHE_HOME
+              value: "/tmp/cache"
+            - name: DENO_DIR
+              value: "/tmp/cache/deno"
+            - name: COOKIES_DIR
+              value: "/cookies"
+            - name: ENABLE_FFMPEG
+              value: "true"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # the heartbeat touches /tmp/healthy after each answer from Telegram; older than 180 s fails
+          startupProbe:
+            exec:
+              command: ["python", "/app/health.py"]
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 18
+          livenessProbe:
+            exec:
+              command: ["python", "/app/health.py"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 2
+          # request equals limit; placeholders: size them from a measured peak (yt-dlp + ffmpeg merge of a large video)
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+              ephemeral-storage: 11Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+              ephemeral-storage: 11Gi # covers the /tmp emptyDir below
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: cookies
+              mountPath: /cookies
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ytdlbot-data
+        # scratch: MAX_PARALLEL_JOBS x ~4.5 GB; the default TMP_BUDGET (MAX_PARALLEL_JOBS x 4500 MiB) fits in it
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Gi
+        # one Netscape cookies file per site (instagram.txt, youtube.txt, ...); the bot never writes it
+        - name: cookies
+          secret:
+            secretName: ytdlbot-cookies
+            optional: true
+            defaultMode: 0440
+---
+# Egress: cluster DNS, the public IPv4 internet, and each proxy exit. No IPv6, no ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ytdlbot
+spec:
+  podSelector:
+    matchLabels:
+      app: ytdlbot
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8 # private
+              - 172.16.0.0/12 # private
+              - 192.168.0.0/16 # private
+              - 100.64.0.0/10 # CGNAT
+              - 169.254.0.0/16 # link-local
+              - 127.0.0.0/8 # loopback
+              - 224.0.0.0/4 # multicast
+    # one rule per proxy exit in PROXY_EXITS (placeholder address and port)
+    - to:
+        - ipBlock:
+            cidr: 203.0.113.10/32
+      ports:
+        - protocol: TCP
+          port: 8080

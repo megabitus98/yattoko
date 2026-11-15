@@ -16,7 +16,6 @@ REMOVED = [
     ".github/workflows/upgrade.yml",
     ".github/workflows/builder.yaml",
     ".github/workflows/codeql-analysis.yml",
-    ".github/dependabot.yml",
 ]
 
 

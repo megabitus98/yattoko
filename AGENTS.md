@@ -13,6 +13,7 @@ ytdlbot is a Telegram bot for a small allow-listed group: send a link in a priva
 - Self-check: `python main.py --self-check` (in `src/` or the image) prints yt-dlp, curl-cffi and kurigram versions, whether impersonation works and whether `DATA_DIR` and `TMPFILE_PATH` are writable, as JSON; exit 1 if any check fails. It creates no Telegram client.
 - Local run: `docker compose up -d` (one service, image `ytdlbot:local`, volumes for `/data` and `/tmp`, read-only root). Without Docker: set `DATA_DIR` and `TMPFILE_PATH` to local paths in `.env`, then `cd src && uv run python main.py`.
 - Format: `black`.
+- Pipeline: `.github/workflows/ci.yml` (PRs from this repository: `tests/repo`, unit tests in the `test` image, then pushes `ghcr.io/<repo>:sha-<head sha>`; the job id `unit` is the check name), `.github/workflows/merge-and-promote.yml` (every 15 min: merges one green Dependabot uv PR, copies the tested digest to `stable`), `.github/dependabot.yml`; `tests/repo/test_pipeline_files.py` checks them. `deploy/` holds a placeholder-only Kubernetes example.
 
 ## Layout
 

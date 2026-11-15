@@ -1,0 +1,107 @@
+# The gate between tested PRs and the `stable` tag (spec 6.14). It polls instead of reacting to
+# merges (a merge made with GITHUB_TOKEN starts no workflow) and needs no plan-dependent feature.
+# Merge: one green, up-to-date Dependabot uv PR per run is squash-merged; a green one behind main
+# is asked to rebase. Promote: main's newest commit goes to `stable` only as the exact image its
+# PR head was tested as. Anything that does not match promotes nothing and fails the run, which
+# is how the owner hears about it. No other workflow writes `stable`.
+# Modified 2026 by megabitus98 (fork): new workflow
+
+name: merge-and-promote
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # squash-merge
+  pull-requests: write # merge, rebase comment
+  packages: write # tag stable
+  checks: read # the `unit` check run
+  statuses: read # Jenkins' `regression` status
+
+concurrency:
+  group: merge-and-promote
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  merge-and-promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      image: ghcr.io/${{ github.repository }}
+    steps:
+      - name: Merge, then promote
+        run: |
+          # green <sha>: the CI job `unit` (a check run; every run of it on that commit) and Jenkins'
+          # `regression` (a commit status) both succeeded; pending, skipped or missing is not green
+          green() {
+            local unit regression
+            unit=$(gh api "repos/$GH_REPO/commits/$1/check-runs?check_name=unit" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions") | .conclusion] | unique | join(",")')
+            regression=$(gh api "repos/$GH_REPO/commits/$1/status" \
+              --jq '.statuses[] | select(.context == "regression") | .state')
+            [ "$unit" = success ] && [ "$regression" = success ]
+          }
+          fail() { echo "::error::$1"; exit 1; }
+
+          # --- merge: at most one action per run
+          main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          : "${main_sha:?}"
+          gh pr list --app dependabot --base main --state open --json number,headRefName,headRefOid \
+            --jq '.[] | select(.headRefName | startswith("dependabot/uv/")) | "\(.number) \(.headRefOid)"' \
+            > "$RUNNER_TEMP/prs"
+          while read -r pr_number head_sha; do
+            green "$head_sha" || continue
+            behind_by=$(gh api "repos/$GH_REPO/compare/$main_sha...$head_sha" --jq .behind_by)
+            if [ "$behind_by" = 0 ]; then
+              # main is the tested head's base, so the squash commit has the tested tree
+              gh pr merge "$pr_number" --squash --match-head-commit "$head_sha"
+              echo "Merged #$pr_number"
+              break
+            fi
+            # behind main: ask Dependabot to rebase (then CI and Jenkins test the new head), once per head
+            pushed_at=$(gh api "repos/$GH_REPO/commits/$head_sha" --jq .commit.committer.date)
+            asked=$(gh api "repos/$GH_REPO/issues/$pr_number/comments?per_page=100" \
+              --jq "[.[] | select(.body == \"@dependabot rebase\" and .created_at > \"$pushed_at\")] | length")
+            if [ "$asked" = 0 ]; then
+              gh pr comment "$pr_number" --body "@dependabot rebase"
+              echo "Asked #$pr_number to rebase"
+              break
+            fi
+          done < "$RUNNER_TEMP/prs"
+
+          # --- promote: the newest main commit, as the digest its PR head was tested as
+          main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha) # the merge above may have moved it
+          : "${main_sha:?}"
+          head_sha=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
+            --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0].head.sha // empty")
+          [ -n "$head_sha" ] || fail "main $main_sha was not merged from a pull request; nothing promoted"
+          green "$head_sha" || fail "the tested head $head_sha of main $main_sha is not green on unit and regression; nothing promoted"
+          main_tree=$(gh api "repos/$GH_REPO/git/commits/$main_sha" --jq .tree.sha)
+          head_tree=$(gh api "repos/$GH_REPO/git/commits/$head_sha" --jq .tree.sha)
+          [ -n "$main_tree" ] && [ "$main_tree" = "$head_tree" ] \
+            || fail "main $main_sha and the tested head $head_sha have different trees; nothing promoted"
+
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          digest=$(docker buildx imagetools inspect "$image:sha-$head_sha" --format '{{.Manifest.Digest}}') \
+            || fail "no image $image:sha-$head_sha; nothing promoted"
+          stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          if [ "$stable" = "$digest" ]; then
+            echo "stable is already $digest"
+            exit 0
+          fi
+          # dated by the main commit, not the run, so a re-run does not mint another tag
+          main_date=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq .commit.committer.date)
+          release="$(date -u -d "$main_date" +%Y.%m.%d)-${main_sha:0:7}"
+          # --prefer-index=false: a carbon copy of that digest, not a new index around it
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$image:stable" --tag "$image:$release" "$image@$digest"
+          stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}')
+          [ "$stable" = "$digest" ] || fail "stable is $stable after the copy, not the tested $digest"
+          echo "Promoted $digest as stable and $release"

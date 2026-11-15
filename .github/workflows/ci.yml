@@ -1,0 +1,74 @@
+# Every PR from a branch of this repository (never from forks): repository checks, unit tests in the
+# image's test target, then the runtime image pushed as sha-<head sha> for Jenkins' regression run.
+# Modified 2026 by megabitus98 (fork): new workflow (spec 6.14); nothing is built on push to main
+
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write # push sha-<head sha>; set explicitly so Dependabot's runs get it too
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The job id is the check name merge-and-promote waits for; green also means the image was pushed.
+  unit:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    env:
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      image: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0 # tests/repo compares with the upstream base commit
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8" # the uv image in the Dockerfile
+
+      - name: Repository checks
+        run: uv run --locked pytest -q tests/repo # --locked: a stale uv.lock fails here, it is not rewritten
+
+      - name: Build the runtime and test images
+        run: |
+          lock_version() { awk -v pkg="$1" '$0 == "name = \"" pkg "\"" {getline; gsub(/"/, ""); print $3}' uv.lock; }
+          yt_dlp_version=$(lock_version yt-dlp)
+          curl_cffi_version=$(lock_version curl-cffi)
+          kurigram_version=$(lock_version kurigram)
+          : "${yt_dlp_version:?not in uv.lock}" "${curl_cffi_version:?not in uv.lock}" "${kurigram_version:?not in uv.lock}"
+          # the same arguments for both targets, so the test image sits on the exact runtime layers
+          build_args=(
+            --platform linux/amd64
+            --build-arg YT_DLP_VERSION="$yt_dlp_version"
+            --build-arg CURL_CFFI_VERSION="$curl_cffi_version"
+            --build-arg KURIGRAM_VERSION="$kurigram_version"
+          )
+          docker build "${build_args[@]}" --target runtime -t "$image:sha-$head_sha" .
+          docker build "${build_args[@]}" --target test -t ytdlbot:test .
+
+      - name: Unit tests
+        run: docker run --rm ytdlbot:test
+
+      - name: Push the runtime image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # Jenkins may already have tested this tag; a re-run must not move it to another digest
+          if docker buildx imagetools inspect "$image:sha-$head_sha" >/dev/null 2>&1; then
+            echo "$image:sha-$head_sha already exists, kept as it is"
+            exit 0
+          fi
+          docker push "$image:sha-$head_sha"

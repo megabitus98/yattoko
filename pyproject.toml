@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "black"]
+dev = ["pytest", "black", "pyyaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
