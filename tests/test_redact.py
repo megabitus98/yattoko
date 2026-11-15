@@ -58,6 +58,16 @@ def test_redact_masks_configured_exits(monkeypatch):
     assert text.endswith("then direct")
 
 
+def test_redact_masks_exit_hosts(monkeypatch):
+    # real yt-dlp proxy errors name the host without the URL (urllib3 and curl-cffi forms)
+    monkeypatch.setattr(config.config, "PROXY_EXITS", ["direct", PROXY])
+    for text in (
+        "('Unable to connect to proxy', NewConnectionError(\"HTTPConnection(host='proxy.example', port=8080): refused\"))",
+        "curl: (7) Failed to connect to example.invalid:443 over proxy Proxy.Example after 0 ms",
+    ):
+        assert "proxy.example" not in redact(text).lower()
+
+
 def test_formatter_redacts_traceback():
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)

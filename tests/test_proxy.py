@@ -196,11 +196,14 @@ def test_proxy_value_never_logged(run, caplog):
     caplog.set_level(logging.DEBUG)
     # a proxy exit that is blocked and followed by another: the fallback is logged for it
     downloader, _ = setup(["direct", CREDENTIALED, PROXY])
-    # yt-dlp's errors can carry the proxy URL; the traceback is logged
+    # yt-dlp's real proxy errors name the host, not the URL (urllib3 form); the traceback is logged
     outcomes[:] = [
         DownloadError(BLOCKED),
         DownloadError(BLOCKED),
-        ProxyError(f"Unable to connect to proxy {CREDENTIALED}"),
+        ProxyError(
+            "('Unable to connect to proxy', NewConnectionError(\"HTTPConnection("
+            "host='proxy.example', port=8080): Failed to establish a new connection\"))"
+        ),
     ]
     downloader.start()
     assert attempts(events) == ["direct", CREDENTIALED, PROXY]

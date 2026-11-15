@@ -2,10 +2,11 @@
 # coding: utf-8
 
 # ytdlbot - redact.py
-# Modified 2026 by megabitus98 (fork): new file, secret redaction for every log line; configured proxy exits masked as a whole, credentials split at the last @ of the authority
+# Modified 2026 by megabitus98 (fork): new file, secret redaction for every log line; configured proxy exits masked as a whole and by host name, credentials split at the last @ of the authority
 
 import logging
 import re
+from urllib.parse import urlsplit
 
 MASK = "***"
 # greedy up to the last @ before the path, query or fragment, as urllib.parse splits user:pass@host
@@ -19,9 +20,13 @@ def redact(text: str) -> str:
 
     # the token first: the test token "1:test" contains the test hash "test";
     # the proxy URLs before the credentials rule, which would change them
-    for secret in (BOT_TOKEN, APP_HASH, *(e for e in PROXY_EXITS if e != "direct")):
+    proxies = [e for e in PROXY_EXITS if e != "direct"]
+    for secret in (BOT_TOKEN, APP_HASH, *proxies):
         if secret:
             text = text.replace(secret, MASK)
+    # yt-dlp's proxy errors name the host without the URL ("host='proxy.example'", "over proxy proxy.example")
+    for host in filter(None, (urlsplit(e).hostname for e in proxies)):
+        text = re.sub(re.escape(host), MASK, text, flags=re.IGNORECASE)
     text = _URL_CREDENTIALS.sub(rf"\1{MASK}@", text)
     return _COOKIE_VALUES.sub(rf"\1={MASK}", text)
 
