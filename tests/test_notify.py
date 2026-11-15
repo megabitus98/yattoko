@@ -12,7 +12,7 @@ from config import BotText
 from database import model
 from database.model import claim_notice, make_engine
 from engine import errors, generic
-from fakes import FakeClient, fake_downloader, fake_message
+from fakes import FakeClient, RecordingClient, fake_downloader, fake_message
 from utils.notify import notify_owners
 
 T = datetime(2026, 11, 14, 12, 0)
@@ -36,16 +36,6 @@ def notice_db(tmp_path, monkeypatch):
     engine = use_db(tmp_path / "notices.db", monkeypatch)
     yield
     engine.dispose()
-
-
-class RecordingClient:
-    def __init__(self, failing=()):
-        self.sent, self.failing = [], set(failing)
-
-    def send_message(self, chat_id, text, **kwargs):
-        if chat_id in self.failing:
-            raise pyrogram.errors.PeerIdInvalid()
-        self.sent.append((chat_id, text))
 
 
 def test_once_per_day():

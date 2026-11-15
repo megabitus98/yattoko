@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large, owner notice texts, upstream's quota and payment texts (ENABLE_VIP)
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large, owner notice texts, upstream's quota and payment texts (ENABLE_VIP), about_version and owner_updated
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -99,6 +99,9 @@ class BotText:
     # to the owners (utils/notify.py); {details} is a redacted error excerpt
     owner_notice = "[Yattoko] {kind} on {site}\ncookies: {cookies}\nexits tried: {exits}\n{details}"
 
+    # after an update, once per new version (utils/notify.announce_version)
+    owner_updated = "Yattoko updated to {version} (was {previous}).\n{title}\n{url}"
+
     owner_cookies_expired = "yt-dlp dropped sessionid: the cookies in {site}.txt no longer work. Export fresh ones."
 
     owner_no_impersonation = (
@@ -151,6 +154,8 @@ Original code by BennyThink, SanujaNS and contributors; intermediate fork by Kat
 
 License: Apache-2.0. Not affiliated with or endorsed by the upstream authors.
     """
+
+    about_version = "Version: {version}"
 
     settings = """
 Choose how I send your videos.

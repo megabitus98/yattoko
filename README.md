@@ -46,6 +46,7 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `REDIS_HOST` | unset | Redis host (port 6379) for the cache of already-sent files. Entries expire after 30 days; a Redis error counts as a cache miss. Unset or unreachable at startup: an in-process cache that a restart clears |
 | `REDIS_PASSWORD` | unset | Password for `REDIS_HOST` (Redis AUTH) |
 | `REDIS_DB` | `1` | Redis database number for the cache |
+| `APP_VERSION`, `APP_RELEASE_TITLE`, `APP_RELEASE_URL` | `dev`, empty, empty | Set by the image build (the release this image is, see Versions); do not set them yourself |
 | `TG_NORMAL_MAX_SIZE` | `2000` | Largest file in MiB. A download that grows past it stops; a finished file over it is downloaded once more one quality lower, then refused |
 | `MAX_PARALLEL_JOBS` | `2` | Downloads running at once. The others wait and their users see "Queued, position N." |
 | `TMP_BUDGET` | `MAX_PARALLEL_JOBS` × 4500 MiB | Bytes all downloads together may keep under `TMPFILE_PATH`; a download stops when they go over. Set it to the scratch volume's size minus a margin |

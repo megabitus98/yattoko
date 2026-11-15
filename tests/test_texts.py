@@ -53,7 +53,7 @@ def test_about_without_link_preview():
         send_message=lambda chat_id, text, **kwargs: sent.append((text, kwargs)),
     )
     main.about_handler(client, fake_message("/about")[0])
-    assert [text for text, _ in sent] == [BotText.about]
+    assert [text for text, _ in sent] == [f"{BotText.about.rstrip()}\n\nVersion: {main.APP_VERSION}"]
     assert sent[0][1]["link_preview_options"].is_disabled is True
 
 

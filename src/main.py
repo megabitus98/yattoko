@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app(), owner notices (impersonation check at startup, login_required/blocked from the handlers), FloodWait retried by a timer instead of a sleeping worker, each owner messaged separately, upstream's /buy, Telegram payment handlers and daily free-quota reset restored behind ENABLE_VIP (anchored buy callbacks priced from BUY_CHOICES)
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app(), owner notices (impersonation check at startup, login_required/blocked from the handlers), FloodWait retried by a timer instead of a sleeping worker, each owner messaged separately, upstream's /buy, Telegram payment handlers and daily free-quota reset restored behind ENABLE_VIP (anchored buy callbacks priced from BUY_CHOICES), version in /about, update announcement at startup
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -43,6 +43,9 @@ from pyrogram.utils import loops
 from config import (
     APP_HASH,
     APP_ID,
+    APP_RELEASE_TITLE,
+    APP_RELEASE_URL,
+    APP_VERSION,
     BOT_TOKEN,
     DATA_DIR,
     ENABLE_DIRECT,
@@ -80,7 +83,7 @@ from health import HEALTH_FILE, start_heartbeat
 from selfcheck import run_selfcheck
 from utils import extract_first_url, extract_url_and_name, sizeof_fmt, timeof_fmt
 from utils.access import GUARDS
-from utils.notify import notify_owners, send_to_owners
+from utils.notify import announce_version, notify_owners, send_to_owners
 
 # Every download runs here; handlers hand the job over and return, so queued jobs hold no kurigram worker.
 JOBS = JobQueue(MAX_PARALLEL_JOBS)
@@ -138,7 +141,8 @@ def about_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    client.send_message(chat_id, BotText.about, link_preview_options=types.LinkPreviewOptions(is_disabled=True))
+    text = f"{BotText.about.rstrip()}\n\n{BotText.about_version.format(version=APP_VERSION)}"
+    client.send_message(chat_id, text, link_preview_options=types.LinkPreviewOptions(is_disabled=True))
 
 
 def ping_handler(client: Client, message: types.Message):
@@ -542,6 +546,7 @@ async def serve(app: Client) -> None:
     start_heartbeat(app)
     # in a thread: on this loop kurigram's sync methods return coroutines instead of sending
     await asyncio.to_thread(check_impersonation, app)
+    await asyncio.to_thread(announce_version, app, OWNERS, APP_VERSION, APP_RELEASE_TITLE, APP_RELEASE_URL)
     await idle()
     await app.stop()
 

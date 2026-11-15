@@ -4,7 +4,7 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages, upstream's VIP, rclone and ffmpeg settings restored (RCLONE_PATH read from RCLONE_PATH), ENABLE_FFMPEG drives the H.264 conversion, REENCODE_MAX_SECONDS, REDIS_PASSWORD and REDIS_DB
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages, upstream's VIP, rclone and ffmpeg settings restored (RCLONE_PATH read from RCLONE_PATH), ENABLE_FFMPEG drives the H.264 conversion, REENCODE_MAX_SECONDS, REDIS_PASSWORD and REDIS_DB, APP_VERSION, APP_RELEASE_TITLE and APP_RELEASE_URL
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -141,6 +141,10 @@ DB_DSN = _raw("DB_DSN") or f"sqlite:///{DATA_DIR}/ytdlbot.db"
 REDIS_HOST = _raw("REDIS_HOST")
 REDIS_PASSWORD = _raw("REDIS_PASSWORD")
 REDIS_DB = _int_env("REDIS_DB", 1)
+# The release this image is, baked in by the build (Dockerfile, ci.yml); "dev" for a local build
+APP_VERSION = _raw("APP_VERSION") or "dev"
+APP_RELEASE_TITLE = _raw("APP_RELEASE_TITLE") or ""
+APP_RELEASE_URL = _raw("APP_RELEASE_URL") or ""
 # one Netscape cookies file per site: <COOKIES_DIR>/instagram.txt, youtube.txt, tiktok.txt, ...
 COOKIES_DIR = _raw("COOKIES_DIR") or "/cookies"
 

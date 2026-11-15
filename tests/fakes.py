@@ -3,12 +3,24 @@
 from types import SimpleNamespace
 
 import pyrogram
+import pyrogram.errors
 from pyrogram import enums
 
 
 class FakeClient:
     def __getattr__(self, name):
         return lambda *args, **kwargs: None
+
+
+class RecordingClient:
+    # send_message records (chat_id, text); a chat in `failing` raises like an owner who never sent /start
+    def __init__(self, failing=()):
+        self.sent, self.failing = [], set(failing)
+
+    def send_message(self, chat_id, text, **kwargs):
+        if chat_id in self.failing:
+            raise pyrogram.errors.PeerIdInvalid()
+        self.sent.append((chat_id, text))
 
 
 def stop_propagation():

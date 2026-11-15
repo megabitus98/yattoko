@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first), OwnerNotice table and claim_notice (one owner notice per site and kind a day), upstream's Payment table, quota columns and quota functions restored (used only with ENABLE_VIP), create_schema() adds the quota columns to an existing users table
+# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first), OwnerNotice table and claim_notice (one owner notice per site and kind a day), upstream's Payment table, quota columns and quota functions restored (used only with ENABLE_VIP), create_schema() adds the quota columns to an existing users table, AppState with get_state/set_state (last announced version)
 
 import logging
 import math
@@ -106,6 +106,14 @@ class OwnerNotice(Base):
     site = Column(String(64), nullable=False)
     kind = Column(String(32), nullable=False)
     last_sent = Column(DateTime, nullable=False)
+
+
+class AppState(Base):
+    # small facts the bot keeps across restarts, e.g. the last version it announced (utils/notify.py)
+    __tablename__ = "app_state"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(String(256), nullable=False)
 
 
 def make_engine(dsn: str) -> Engine:
@@ -228,6 +236,20 @@ def claim_notice(site: str, kind: str, now: datetime) -> bool:
     )
     with session_manager() as session:
         return session.execute(statement).rowcount == 1
+
+
+def get_state(key: str) -> str | None:
+    with session_manager() as session:
+        row = session.get(AppState, key)
+        return None if row is None else row.value
+
+
+def set_state(key: str, value: str) -> None:
+    statement = sqlite_insert(AppState).values(key=key, value=value).on_conflict_do_update(
+        index_elements=["key"], set_={"value": value}
+    )
+    with session_manager() as session:
+        session.execute(statement)
 
 
 # Quota, restored from upstream. The callers (engine/base.py, main.py) call these only with ENABLE_VIP on.
