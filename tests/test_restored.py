@@ -154,7 +154,7 @@ def test_slice1_database_upgraded(tmp_path, monkeypatch):
         conn.execute(text("INSERT INTO users (user_id) VALUES (7)"))
     model.create_schema(engine)
     monkeypatch.setattr(model, "SessionFactory", sessionmaker(bind=engine))
-    assert model.get_quality_settings(7) == "1080p"
+    assert model.get_quality_settings(7) == "1440p"  # the default (2K) for a row without settings
     monkeypatch.setattr(model, "ENABLE_VIP", True)
     assert (model.get_free_quota(7), model.get_paid_quota(7)) == (model.FREE_DOWNLOAD, 0)
 

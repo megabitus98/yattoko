@@ -67,7 +67,8 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `FREE_DOWNLOAD` | `3` | Free downloads per user per day, with `ENABLE_VIP` |
 | `TOKEN_PRICE` | `10` | Downloads per US dollar. Read but unused, as in upstream: the `/buy` price list is fixed |
 | `RCLONE_PATH` | unset | Restored from upstream (which reads it as `RCLONE`), where no code uses it any more. No effect |
-| `ENABLE_FFMPEG` | `false` | Restored from upstream, where no code uses it any more. No effect; ffmpeg is always used to merge streams and make thumbnails |
+| `ENABLE_FFMPEG` | `false` | Upstream's name (it once converted webm/flv to mp4). On: a video up to `REENCODE_MAX_SECONDS` long gets the best picture up to the quality setting (default 1440p), and a VP9 or AV1 result is converted to H.264 so Telegram plays it on every device. Off: H.264 first, nothing converted. ffmpeg is always used to merge streams and make thumbnails |
+| `REENCODE_MAX_SECONDS` | `300` | Longest video `ENABLE_FFMPEG` converts; longer ones keep H.264 first. 0 turns conversion off |
 
 Cookies are per site: `COOKIES_DIR/instagram.txt`, `youtube.txt`, `tiktok.txt`, and for other sites the yt-dlp extractor name in lower case (`vimeo.txt`). The site is the one yt-dlp's extractor would pick for the link. When the file for a site exists and is not empty, every download from that site uses it; otherwise the bot tries without a login. The bot only reads the files: each download gets an in-memory copy, so the directory can be a read-only mount (in Compose, add `- ./cookies:/cookies:ro` under `volumes`). Use a spare account for each site, not a personal one: every allowed user's downloads run as that account.
 

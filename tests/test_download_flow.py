@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +36,9 @@ def fake_ydl(monkeypatch):
         ):
             self.calls.append(("extract_info", url, download, process))
             return dict(state.results.pop(0))
+
+        def build_format_selector(self, spec):
+            return ("selector", spec)
 
         def process_ie_result(self, info, download=True, extra_info=None):
             self.calls.append(("process_ie_result", info, download))
@@ -222,3 +226,153 @@ def test_match_filter_passes_single_video():
         single_video_only({"id": "x", "live_status": "not_live"}, incomplete=False)
         is None
     )
+
+
+def test_instagram_single_file_first():
+    # Instagram's single files are H.264 with sound, but yt-dlp lists their codecs as unknown,
+    # so the codec sort ranks them below the separate VP9 streams (VP9 shows one frame on a Mac)
+    from test_formats import select
+
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/")
+    formats = [
+        {"format_id": "1", "url": "https://example.invalid/1", "ext": "mp4"},
+        {"format_id": "dash-v", "url": "https://example.invalid/v", "ext": "mp4", "vcodec": "vp09.00.31.08",
+         "acodec": "none", "width": 720, "height": 1280, "tbr": 767},
+        {"format_id": "dash-a", "url": "https://example.invalid/a", "ext": "m4a", "vcodec": "none",
+         "acodec": "mp4a.40.5", "tbr": 55},
+    ]
+    assert select(downloader._setup_formats(), formats) == "1"
+    other, _ = fake_downloader("https://www.youtube.com/watch?v=x")
+    assert not other._setup_formats()["format"].startswith("best/")
+
+
+def test_tiktok_prefers_h265():
+    # TikTok's H.264 files stop at 540p with 32 kb/s sound; its H.265 files reach 1080p with 64 kb/s
+    from test_formats import select
+
+    def fmt(format_id, vcodec, acodec, width=None, height=None, ext="mp4"):
+        return {"format_id": format_id, "url": f"https://example.invalid/{format_id}", "ext": ext,
+                "vcodec": vcodec, "acodec": acodec, "width": width, "height": height}
+
+    formats = [
+        fmt("audio", "none", "mp3", ext="mp3"),
+        fmt("h264_540p", "h264", "aac", 576, 1024),
+        fmt("bytevc1_720p", "h265", "aac", 720, 1280),
+        fmt("bytevc1_1080p", "h265", "aac", 1080, 1920),
+    ]
+    init_user(778)
+    downloader, _ = fake_downloader("https://www.tiktok.com/@someone/video/1", user_id=778)
+    assert select(downloader._setup_formats(), formats) == "bytevc1_1080p"
+    # a codec chosen in /settings still wins
+    set_user_settings(778, "vcodec", "vcodec-avc1")
+    downloader, _ = fake_downloader("https://www.tiktok.com/@someone/video/1", user_id=778)
+    assert select(downloader._setup_formats(), formats) == "h264_540p"
+    # other sites keep H.264 first
+    other, _ = fake_downloader("https://www.youtube.com/watch?v=x")
+    assert other._setup_formats()["format_sort"][0] == "vcodec:h264"
+
+
+def test_instagram_codec_setting_wins():
+    # Instagram's 1080p exists only as VP9; whoever picks VP9 in /settings gets it
+    from test_formats import select
+
+    formats = [
+        {"format_id": "1", "url": "https://example.invalid/1", "ext": "mp4"},
+        {"format_id": "vp9-720", "url": "https://example.invalid/v7", "ext": "mp4", "vcodec": "vp09.00.31.08",
+         "acodec": "none", "width": 720, "height": 1280, "tbr": 729},
+        {"format_id": "vp9-1080", "url": "https://example.invalid/v10", "ext": "mp4", "vcodec": "vp09.00.40.08",
+         "acodec": "none", "width": 1080, "height": 1920, "tbr": 1391},
+        {"format_id": "a", "url": "https://example.invalid/a", "ext": "m4a", "vcodec": "none",
+         "acodec": "mp4a.40.5", "tbr": 46},
+    ]
+    init_user(779)
+    set_user_settings(779, "vcodec", "vcodec-vp9")
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/", user_id=779)
+    assert select(downloader._setup_formats(), formats) == "vp9-1080+a"
+
+
+def test_short_video_switches_to_quality_first(fake_ydl, tmp_path):
+    # the duration is known only after extraction; attempt() then rebuilds the format choice
+    picked = {"format": "best", "format_sort": ["hdr:sdr", "res:1440"]}
+    fake_ydl.results = [dict(VIDEO, duration=30)]
+    attempt("https://www.youtube.com/watch?v=x", "youtube", "direct", {"format": "x"}, tmp_path,
+            choose=lambda info: picked if info["duration"] < 60 else None)
+    ydl = fake_ydl.instances[-1]
+    assert ydl.params["format_sort"] == picked["format_sort"]
+    assert ydl.format_selector == ("selector", "best")
+
+
+def test_choose(monkeypatch):
+    from engine import generic
+
+    monkeypatch.setattr(generic, "REENCODE_MAX_SECONDS", 300)
+    monkeypatch.setattr(generic, "ENABLE_FFMPEG", False)
+    init_user(780)
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/", user_id=780)
+    assert downloader._choose({"duration": 30}) is None  # switched off: H.264 first as before
+    monkeypatch.setattr(generic, "ENABLE_FFMPEG", True)
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/", user_id=780)
+    picked = downloader._choose({"duration": 30})
+    assert picked["format_sort"][:2] == ["hdr:sdr", "res:1440"]  # 2K by default
+    assert not picked["format"].startswith("best/")  # the VP9 1080p beats Instagram's 720p H.264 file
+    assert downloader._choose({"duration": 301}) is None
+    # unknown length (Instagram gives none): best picture; the file's real length decides afterwards
+    assert downloader._choose({})["format_sort"][0] == "hdr:sdr"
+    monkeypatch.setattr(generic, "REENCODE_MAX_SECONDS", 0)
+    assert downloader._choose({"duration": 30}) is None
+    monkeypatch.setattr(generic, "REENCODE_MAX_SECONDS", 300)
+    set_user_settings(780, "vcodec", "vcodec-vp9")
+    downloader, _ = fake_downloader("https://www.instagram.com/reel/abc/", user_id=780)
+    assert downloader._choose({"duration": 30}) is None  # a codec chosen in /settings is kept
+
+
+def test_converted_after_download(fake_ydl, monkeypatch):
+    from engine import generic
+
+    monkeypatch.setattr(generic, "ENABLE_FFMPEG", True)
+    converted = []
+
+    def fake_to_h264(path, max_side, max_seconds, timeout, on_start=None):
+        if path.name == "vp9.mp4":
+            on_start()
+            converted.append((path.name, max_side, max_seconds))
+            return True
+        return False
+
+    monkeypatch.setattr(generic.transcode, "to_h264", fake_to_h264)
+    init_user(781)
+    downloader, edits = fake_downloader("https://www.youtube.com/watch?v=x", user_id=781)
+    fake_ydl.results = [dict(VIDEO, duration=30)]
+    (Path(downloader._tempdir.name) / "vp9.mp4").write_bytes(b"x")
+    downloader._download(downloader._setup_formats())
+    assert converted == [("vp9.mp4", 1440, generic.REENCODE_MAX_SECONDS)]
+    assert edits == [BotText.converting]
+    # an H.264 file: no conversion, no message
+    edits.clear()
+    (Path(downloader._tempdir.name) / "vp9.mp4").rename(Path(downloader._tempdir.name) / "h264.mp4")
+    fake_ydl.results = [dict(VIDEO, duration=30)]
+    downloader._download(downloader._setup_formats())
+    assert edits == []
+
+
+def test_too_long_to_convert_downloads_again_h264_first(fake_ydl, monkeypatch):
+    # unknown length, best picture taken, the file turns out longer than REENCODE_MAX_SECONDS
+    from engine import generic
+
+    monkeypatch.setattr(generic, "ENABLE_FFMPEG", True)
+
+    def too_long(path, max_side, max_seconds, timeout, on_start=None):
+        raise generic.transcode.TooLong()
+
+    monkeypatch.setattr(generic.transcode, "to_h264", too_long)
+    init_user(782)
+    downloader, edits = fake_downloader("https://www.instagram.com/reel/abc/", user_id=782)
+    fake_ydl.results = [dict(VIDEO), dict(VIDEO)]
+    (Path(downloader._tempdir.name) / "vp9.mp4").write_bytes(b"x")
+    downloader._download(downloader._setup_formats())
+    first, second = fake_ydl.instances
+    assert first.format_selector[0] == "selector"  # quality first
+    assert not hasattr(second, "format_selector")  # H.264 first, as built
+    assert second.params["format"].startswith("best/")  # Instagram's H.264 file
+    assert list(Path(downloader._tempdir.name).iterdir()) == []  # emptied before the second download
+    assert edits == []

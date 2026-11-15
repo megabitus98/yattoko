@@ -4,7 +4,7 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages, upstream's VIP, rclone and ffmpeg settings restored (RCLONE_PATH read from RCLONE_PATH)
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages, upstream's VIP, rclone and ffmpeg settings restored (RCLONE_PATH read from RCLONE_PATH), ENABLE_FFMPEG drives the H.264 conversion, REENCODE_MAX_SECONDS
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -153,10 +153,12 @@ ENABLE_SPDL = _bool_env("ENABLE_SPDL")
 ENABLE_STATS = _bool_env("ENABLE_STATS")
 ENABLE_GROUPS = _bool_env("ENABLE_GROUPS")
 M3U8_SUPPORT = _bool_env("M3U8_SUPPORT")
-
-# restored from upstream, off by default. Upstream master reads RCLONE_PATH and ENABLE_FFMPEG but nothing
-# uses them (their code went in its 2025 refactor), so here too they are only read.
+# ffmpeg converts VP9/AV1 downloads to H.264 (engine/transcode.py); upstream's name, its old job was
+# converting webm/flv to mp4. Off: H.264 first, nothing converted.
 ENABLE_FFMPEG = _bool_env("ENABLE_FFMPEG")
+
+# restored from upstream, off by default. Upstream master reads RCLONE_PATH but nothing uses it (its code
+# went in the 2025 refactor), so here too it is only read. ENABLE_FFMPEG is read above.
 RCLONE_PATH = _raw("RCLONE_PATH")
 
 # payment settings: free quota reset daily, paid quota bought with /buy (Telegram payments)
@@ -177,6 +179,11 @@ if MAX_PARALLEL_JOBS < 1:
 TMP_BUDGET: int = _int_env("TMP_BUDGET", MAX_PARALLEL_JOBS * 4500 * 1024 * 1024)
 # seconds one job may take
 JOB_TIMEOUT: int = _int_env("JOB_TIMEOUT", 2700)
+# videos up to this long (seconds) get the best picture in any codec and are converted to H.264
+# when needed; longer ones keep H.264 first (a 1440p conversion takes minutes on a small server)
+REENCODE_MAX_SECONDS: int = _int_env("REENCODE_MAX_SECONDS", 300)
+if REENCODE_MAX_SECONDS < 0:
+    raise ConfigError("REENCODE_MAX_SECONDS must be 0 or more")
 # the home's own static public IPs; links that resolve to them are refused
 OWN_PUBLIC_IPS = parse_ip_list(os.getenv("OWN_PUBLIC_IPS"), "OWN_PUBLIC_IPS")
 # yt-dlp tries these in order and moves on only when one is blocked; uploads to Telegram never use them

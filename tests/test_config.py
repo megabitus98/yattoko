@@ -66,4 +66,15 @@ def test_job_defaults():
     assert cfg.MAX_PARALLEL_JOBS == 2
     assert cfg.TMP_BUDGET == 2 * 4500 * 1024 * 1024
     assert cfg.JOB_TIMEOUT == 2700
+    assert cfg.REENCODE_MAX_SECONDS == 300
     assert cfg.OWN_PUBLIC_IPS == frozenset()
+
+
+def test_reencode_max_seconds_not_negative(monkeypatch):
+    monkeypatch.setenv("REENCODE_MAX_SECONDS", "-1")
+    spec = importlib.util.spec_from_file_location("config_fresh_copy2", cfg.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    # the fresh copy defines its own ConfigError class
+    with pytest.raises(Exception, match="REENCODE_MAX_SECONDS") as excinfo:
+        spec.loader.exec_module(fresh)
+    assert type(excinfo.value).__name__ == "ConfigError"

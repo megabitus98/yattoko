@@ -140,7 +140,7 @@ def test_settings_saved_by_user_id():
     query, answers = fake_callback("240p", user_id=2, chat_id=555)
     main.quality_callback(FakeClient(), query)
     assert get_quality_settings(2) == "240p"
-    assert get_quality_settings(555) == "1080p"  # default: nothing stored for the chat
+    assert get_quality_settings(555) == "1440p"  # default (2K): nothing stored for the chat
     assert len(answers) == 1
 
 

@@ -62,7 +62,7 @@ class Setting(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    quality = Column(Enum("1440p", "1080p", "720p", "480p", "240p"), nullable=False, default="1080p")
+    quality = Column(Enum("1440p", "1080p", "720p", "480p", "240p"), nullable=False, default="1440p")
     format = Column(Enum("video", "audio", "document"), nullable=False, default="video")
     vcodec = Column(
         Enum("vcodec-auto", "vcodec-vp9", "vcodec-avc1", "vcodec-av01"),
@@ -163,7 +163,7 @@ def get_quality_settings(tgid) -> Literal["1440p", "1080p", "720p", "480p", "240
         if user and user.settings:
             return user.settings.quality
 
-        return "1080p"
+        return "1440p"
 
 
 def get_format_settings(tgid) -> Literal["video", "audio", "document"]:

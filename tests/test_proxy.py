@@ -28,7 +28,7 @@ def run(monkeypatch):
     # error queued for that attempt (None succeeds). Nothing is fetched.
     events, outcomes, notices = [], [], []
 
-    def fake_attempt(url, site, exit, opts, tmpdir, on_cookies_expired=None):
+    def fake_attempt(url, site, exit, opts, tmpdir, on_cookies_expired=None, choose=None):
         events.append(("attempt", exit))
         error = outcomes.pop(0)
         (Path(tmpdir) / ("x.mp4.part" if error else "x.mp4")).write_bytes(b"x")

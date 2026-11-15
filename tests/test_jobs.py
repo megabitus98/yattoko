@@ -98,7 +98,8 @@ def test_oversized_result_retries_lower_then_refuses(monkeypatch):
     formats = []
 
     def oversized_attempt(url, site, exit, opts, tmpdir, **kwargs):
-        formats.append(opts["format"])
+        # the quality limit is the res field of the sort (smaller side), not a height filter
+        formats.append([f for f in opts["format_sort"] if f.startswith("res:")][0])
         # yt-dlp would skip a file that is already there, so the retry must start from an empty dir
         assert list(tmpdir.iterdir()) == []
         (tmpdir / "video.mp4").write_bytes(b"x" * 101)
@@ -109,10 +110,7 @@ def test_oversized_result_retries_lower_then_refuses(monkeypatch):
     downloader, edits = fake_downloader(URL, user_id=811)
     key = downloader._calc_video_key()
     downloader.start()
-    assert [f.split("+")[0] for f in formats] == [
-        "bestvideo[height<=1080][filesize<1.5G]",
-        "bestvideo[height<=720][filesize<1.5G]",
-    ]
+    assert formats == ["res:1080", "res:720"]
     assert edits == [BotText.too_large]
     assert BotText.too_large == "This video is too large for Telegram (over 2 GB)."
     # the file is cached under the quality the user asked for

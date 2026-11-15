@@ -60,6 +60,7 @@ class BotText:
     received = "Request received, working on it..."
 
     downloading = "▶️ Downloading..."
+    converting = "🔄 Converting the video so it plays on every device..."
 
     uploading = "📤 Uploading..."
 
