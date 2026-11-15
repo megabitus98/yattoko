@@ -2,30 +2,40 @@
   {
     "name": "youtube-video",
     "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-    "vcodec": ["h264"],
+    "vcodec": [
+      "h264"
+    ],
     "audio": true,
     "duration_min": 1
   },
   {
     "name": "youtube-short",
     "url": "https://www.youtube.com/shorts/Hb3rmh-_FMw",
-    "vcodec": ["h264"],
+    "vcodec": [
+      "h264"
+    ],
     "audio": true,
     "duration_min": 1,
-    "min_short_side": 1080
+    "min_short_side": 720,
+    "note": "vertical: catches a height filter that drops 720x1280 (the 480x854 bug); offers 720x1280 at most (2026-11-15)"
   },
   {
     "name": "tiktok",
     "url": "https://www.tiktok.com/@tiktok/video/7525846462563929375",
-    "vcodec": ["hevc", "h264"],
+    "vcodec": [
+      "hevc",
+      "h264"
+    ],
     "audio": true,
     "duration_min": 1
   },
   {
     "name": "instagram-reel",
     "url": "https://www.instagram.com/reel/Chunk8-jurw/",
-    "vcodec": ["h264"],
-    "audio": true,
-    "min_short_side": 1080
+    "vcodec": [
+      "h264"
+    ],
+    "audio": false,
+    "note": "no sound and 720x1280 at most (2026-11-15); a reel with sound and 1080p VP9 would also cover the H.264 conversion"
   }
 ]

@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - regression/run.py
-# Modified 2026 by megabitus98 (fork): new file, real downloads through the bot's own download path, checked with ffprobe, one JSON line per link, optional upload through a test bot
+# Modified 2026 by megabitus98 (fork): new file, real downloads through the bot's own download path, checked with ffprobe against what the site offered, one JSON line per link, optional upload through a test bot
 
 """Real-download regression run: python /app/regression/run.py [--links FILE] [--upload]
 
@@ -36,6 +36,9 @@ from config import APP_HASH, APP_ID  # noqa: E402
 from engine import transcode  # noqa: E402
 from engine.errors import classify  # noqa: E402
 from engine.generic import YoutubeDownload  # noqa: E402
+from utils import netcheck  # noqa: E402
+
+CAP = 1440  # the default quality setting (2K); chat 0 has no saved settings
 
 NOTHING_FOUND = dict.fromkeys(("vcodec", "vtag", "acodec", "width", "height", "duration", "size"))
 
@@ -71,25 +74,58 @@ def probe(path: Path) -> dict:
     }
 
 
-def evaluate(found: dict, expect: dict) -> str:
-    # A file that Telegram would not play everywhere, or that misses its sound or its resolution, is
-    # a broken downloader, not a gone link. H.265 plays on iPhones and Macs only with the hvc1 tag.
-    ok = (
-        found["vcodec"] in expect["vcodec"]
-        and transcode.playable(found["vcodec"], found["vtag"])
-        and (found["acodec"] is not None or not expect.get("audio"))
-        and found["duration"] >= expect.get("duration_min", 0)
-        and min(found["width"] or 0, found["height"] or 0) >= expect.get("min_short_side", 0)
-    )
-    return "passed" if ok else "downloader_broken"
+def offered(formats: list[dict], quality_first: bool) -> dict | None:
+    # What the site offered for this download: the biggest smaller side up to CAP among video formats,
+    # and whether any format lists sound. Formats with no size or codec listed (Instagram's single
+    # files) count for neither. H.264 first (long videos, or ENABLE_FFMPEG off) counts only codecs
+    # that play as they are. None when the site listed no formats.
+    if not formats:
+        return None
+    sides = [
+        min(f["width"], f["height"], CAP)
+        for f in formats
+        if f.get("width") and f.get("height") and f.get("vcodec") not in (None, "none")
+        and (quality_first or str(f["vcodec"]).startswith(("avc", "h264", "hev", "hvc", "h265")))
+    ]
+    return {"short_side": max(sides, default=0), "audio": any(f.get("acodec") not in (None, "none") for f in formats)}
+
+
+def evaluate(found: dict, expect: dict, offer: dict | None) -> tuple[str, str]:
+    # The bot is judged by what the site offered for this very download, so a link that changes does
+    # not read as a broken bot. A file Telegram would not play everywhere, without the sound or below
+    # the picture size the site offered is a broken downloader. A link that no longer has what it is
+    # listed for (expect: audio, min_short_side) is gone: replace it. H.265 needs the hvc1 tag.
+    short_side = min(found["width"] or 0, found["height"] or 0)
+    if found["vcodec"] not in expect["vcodec"] or not transcode.playable(found["vcodec"], found["vtag"]):
+        return "downloader_broken", f"video {found['vcodec']}/{found['vtag']} does not play everywhere"
+    if found["duration"] < expect.get("duration_min", 0):
+        return "downloader_broken", f"only {found['duration']:.1f} s long"
+    if offer and offer["audio"] and found["acodec"] is None:
+        return "downloader_broken", "the site offered sound, the file has none"
+    if offer and short_side < offer["short_side"]:
+        return "downloader_broken", f"smaller side {short_side}, the site offered {offer['short_side']}"
+    if offer and expect.get("audio") and not offer["audio"]:
+        return "link_gone", "the site offers no sound for this link any more"
+    if offer and offer["short_side"] < expect.get("min_short_side", 0):
+        return "link_gone", f"the site offers only {offer['short_side']} on the smaller side"
+    return "passed", ""
 
 
 def run_link(link: dict) -> tuple[dict, YoutubeDownload | None]:
     # The bot's download path without Telegram: host check, exits, format ladder, per-site rules, size
     # guard and the H.264 conversion. The caller removes downloader._tempdir (start() would, after uploading).
     downloader = None
+    seen = {}
     try:
         downloader = YoutubeDownload(_NoTelegram(), _progress_message(), link["url"])
+        # attempt() hands every extracted result to choose(); record the format list the site gave
+        choose = downloader._choose
+
+        def recording_choose(info):
+            seen["formats"] = info.get("formats") or []
+            return choose(info)
+
+        downloader._choose = recording_choose
         files = downloader._download_fitting()
         if len(files) != 1:
             # the bot would send an album
@@ -98,8 +134,11 @@ def run_link(link: dict) -> tuple[dict, YoutubeDownload | None]:
     except Exception as e:
         logging.exception("%s failed", link["name"])
         status = "link_gone" if classify(e) == "unavailable" else "downloader_broken"
-        return {"name": link["name"], "status": status, **NOTHING_FOUND}, downloader
-    return {"name": link["name"], "status": evaluate(found, link), **found}, downloader
+        return {"name": link["name"], "status": status, "reason": classify(e), **NOTHING_FOUND}, downloader
+    # the mode of the file that was kept: a too-long conversion downloads again H.264 first
+    offer = offered(seen.get("formats", []), quality_first=downloader._quality_first)
+    status, reason = evaluate(found, link, offer)
+    return {"name": link["name"], "status": status, "reason": reason, **found, "offered": offer}, downloader
 
 
 def upload(downloader: YoutubeDownload, token: str, chat_id: int) -> str:
@@ -130,6 +169,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.upload and not (token and chat_id.removeprefix("-").isdigit() and APP_ID and APP_HASH):
         # before anything is downloaded; exit 1, since 2 and 3 say something about the links
         sys.exit("--upload needs TEST_BOT_TOKEN, a numeric TEST_CHAT_ID, APP_ID and APP_HASH")
+
+    try:
+        # broken DNS or no network would otherwise read as "every link is gone" (exit 3)
+        netcheck.check_url("https://www.youtube.com/", frozenset())
+    except Exception as e:
+        sys.exit(f"No network or DNS, nothing was tested: {e}")
 
     statuses, smallest = [], None
     for link in json.loads(args.links.read_text(encoding="utf-8")):

@@ -37,11 +37,13 @@ One JSON line per link on stdout (logs and tracebacks go to stderr, redacted):
 
 With `--upload`, a last line `{"name": "upload", "status": ...}` follows.
 
-- `passed`: the file meets every expectation in `links.json`.
-- `link_gone`: yt-dlp says the video is private, deleted or not available here (`classify()` returns `unavailable`). Replace the link; this is not a downloader regression.
-- `downloader_broken`: anything else that fails, including a file that misses an expectation (wrong codec, no sound, too small, only audio) and an upload that did not arrive as a video.
+Each line also has `reason` (why it is not `passed`) and `offered`: what the site listed for this very download, `{"short_side", "audio"}` (the biggest smaller side up to 1440 among video formats, and whether any format has sound; `null` when the site listed no formats). The bot is judged against `offered`, so a link that changes does not read as a broken bot.
 
-Exit code: 0 when every line passed, 2 when any line is `downloader_broken`, 3 when nothing is broken but a link is gone, 1 when the run itself could not start (for example `--upload` without the test bot's settings).
+- `passed`: the file plays everywhere (H.264, or H.265 tagged `hvc1`), is at least `duration_min` long, has sound when the site offered sound, and its smaller side is at least what the site offered. The link still has what it is listed for.
+- `downloader_broken`: the download failed for any reason other than "unavailable", or the file misses what the site offered (sound, picture size), or it does not play everywhere (VP9, AV1, hev1, audio only), or the upload did not arrive as a video. This is the bot's or yt-dlp's fault.
+- `link_gone`: yt-dlp says the video is private, deleted or not available here (`classify()` returns `unavailable`), or the site no longer offers what the link is listed for (`audio`, `min_short_side`). Replace the link; this is not a downloader regression.
+
+Exit code: 0 when every line passed, 2 when any line is `downloader_broken`, 3 when nothing is broken but a link is gone, 1 when the run itself could not start: no network or DNS (checked first, so an outage does not read as every link being gone), or `--upload` without the test bot's settings.
 
 ## links.json
 
@@ -49,10 +51,9 @@ One YouTube video, one YouTube Short, one TikTok and one Instagram reel, each fr
 
 - `name`, `url`
 - `vcodec`: the codecs ffprobe may report for the main video stream (the embedded cover does not count). Telegram plays H.264 everywhere; H.265 counts only with the `hvc1` tag (TikTok's files have it).
-- `audio`: `true` when the file must have a sound stream.
+- `audio`: `true` when the link is in the list for its sound: the site must still offer sound, else `link_gone`. With `false` the link is not checked for that, but a file without the sound the site offered is still `downloader_broken`.
 - `duration_min` (optional): the shortest acceptable length in seconds.
-- `min_short_side` (optional): the smallest acceptable smaller side in pixels.
+- `min_short_side` (optional): the smallest smaller side the site must still offer, else `link_gone`.
+- `note` (optional): why the link is in the list.
 
-The expectations come from the first real test through the bot (2026-11-15). There, an Instagram reel (11 s) had sound (HE-AAC) and came back at 1080 (VP9 converted to H.264 with `ENABLE_FFMPEG`), and a vertical 1080x1920 Short once came back at 480x854 (since fixed). Those were not necessarily the links listed here.
-
-The first run of this suite in the `runtime` image on 2026-11-15 (yt-dlp 2026.10.26, cookie-less, direct exit) did not meet them for two of the links. The Short `Hb3rmh-_FMw` came back as H.264 720x1280 with sound. The reel `Chunk8-jurw` (5 s) came back as H.264 720x1280 with no sound stream. In both cases yt-dlp was offered nothing above 720p: the quality-first sort would have taken a 1080p format and converted it, and nothing was converted. yt-dlp also found no format with sound for the reel; it reads Instagram's `has_audio`. So either these sources (cookie-less) do not have what the expectations ask for, and the links need replacing with ones that do, or the sites now withhold it. The owner decides; until then these two links report `downloader_broken`.
+What the links offered on 2026-11-15 (yt-dlp 2026.10.26, cookie-less, direct exit): the Short `Hb3rmh-_FMw` 720x1280 at most (H.264, VP9, AV1) with sound, so it still catches a height filter that drops vertical videos (a 1080x1920 Short once came back 480x854); the reel `Chunk8-jurw` H.264 720x1280 at most and no sound at all. The first run expected 1080 and sound from both and reported `downloader_broken` for a bot that had picked the best the sites offered; that is why the checks compare with `offered`. No link here makes the bot convert VP9 to H.264; an Instagram reel with sound and 1080p VP9 from an official account would (the first real test converted an 11 s 1080p VP9 reel in about 1 s on 2 cores); the conversion itself is covered by `tests/test_transcode.py` with real clips.

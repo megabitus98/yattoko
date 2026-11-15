@@ -34,9 +34,19 @@ def raises(message):
     return fake
 
 
-def writes(make):
-    # stands in for yt-dlp: one finished file in the job's scratch directory
+def fmt(width, height, vcodec="avc1.640028", acodec="none"):
+    return {"format_id": f"{vcodec}-{height}", "width": width, "height": height, "vcodec": vcodec, "acodec": acodec}
+
+
+SOUND = {"format_id": "a", "vcodec": "none", "acodec": "mp4a.40.2"}
+
+
+def writes(make, offered=None):
+    # stands in for yt-dlp: one finished file in the job's scratch directory; offered is the format list
+    # the site gave, handed to the bot's choose() the way attempt() does after extraction
     def fake(url, site, exit, opts, tmpdir, **kwargs):
+        if offered is not None and kwargs.get("choose"):
+            kwargs["choose"]({"formats": offered, "duration": 1})
         work = tmpdir / "work"
         work.mkdir()
         shutil.move(make(work), tmpdir)
@@ -55,8 +65,13 @@ def writes(make):
         # without ENABLE_FFMPEG nothing is converted: VP9 shows one frame in Telegram for macOS
         pytest.param(writes(make_clip), LINK, "downloader_broken", marks=needs_ffmpeg),
         pytest.param(writes(audio_only), LINK, "downloader_broken", marks=needs_ffmpeg),
-        # 640x360 where the source has 1080p (the Short that once came back 480x854)
-        pytest.param(writes(h264), LINK | {"min_short_side": 1080}, "downloader_broken", marks=needs_ffmpeg),
+        # 640x360 where the source offers 1080p (the Short that once came back 480x854)
+        pytest.param(writes(h264, [fmt(1080, 1920), fmt(360, 640), SOUND]), LINK, "downloader_broken", marks=needs_ffmpeg),
+        # the best the source offers: passed, whatever the link's own size
+        pytest.param(writes(h264, [fmt(640, 360), SOUND]), LINK | {"min_short_side": 360}, "passed", marks=needs_ffmpeg),
+        # the link no longer has what it is listed for: replace the link, the bot is fine
+        pytest.param(writes(h264, [fmt(640, 360), SOUND]), LINK | {"min_short_side": 1080}, "link_gone", marks=needs_ffmpeg),
+        pytest.param(writes(h264, [fmt(640, 360)]), LINK, "link_gone", marks=needs_ffmpeg),  # no sound offered
     ],
 )
 def test_status_mapping(monkeypatch, fake_attempt, link, status):
@@ -74,9 +89,34 @@ def test_status_mapping(monkeypatch, fake_attempt, link, status):
 def test_hevc_needs_hvc1_tag():
     tiktok = {"vcodec": ["hevc", "h264"], "audio": True}
     probe = {"vcodec": "hevc", "vtag": "hvc1", "acodec": "aac", "width": 1080, "height": 1920, "duration": 10.0, "size": 1}
-    assert run.evaluate(probe, tiktok) == "passed"
+    offered = {"short_side": 1080, "audio": True}
+    assert run.evaluate(probe, tiktok, offered)[0] == "passed"
     # hev1 does not play in Telegram on iPhones and Macs
-    assert run.evaluate(probe | {"vtag": "hev1"}, tiktok) == "downloader_broken"
+    assert run.evaluate(probe | {"vtag": "hev1"}, tiktok, offered)[0] == "downloader_broken"
+
+
+def test_offered_summary():
+    # Instagram's single files list no size or codec: they count for neither
+    unknown = {"format_id": "1"}
+    formats = [unknown, fmt(720, 1280, "vp09.00.31.08"), fmt(1080, 1920, "vp09.00.40.08"), fmt(2160, 3840), SOUND]
+    assert run.offered(formats, quality_first=True) == {"short_side": 1440, "audio": True}  # capped at 2K
+    # H.264 first (long videos): only what plays as it is counts
+    assert run.offered([fmt(720, 1280), fmt(1080, 1920, "vp9")], quality_first=False) == {"short_side": 720, "audio": False}
+    assert run.offered([], quality_first=True) is None  # no list: nothing to compare with
+
+
+def test_no_network_stops_the_run(monkeypatch, tmp_path):
+    # broken DNS must not read as "every link is gone"
+    from utils import netcheck
+
+    def no_dns(*args, **kwargs):
+        raise OSError("no DNS")
+
+    monkeypatch.setattr(netcheck.check_url, "__defaults__", (no_dns,))
+    monkeypatch.setattr(generic, "attempt", raises("must not be reached"))
+    with pytest.raises(SystemExit) as stopped:
+        run.main(["--links", str(tmp_path / "missing.json")])
+    assert stopped.value.code not in (0, 2, 3)
 
 
 def test_exit_codes():
