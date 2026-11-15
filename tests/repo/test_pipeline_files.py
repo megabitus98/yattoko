@@ -294,3 +294,48 @@ def test_promote_creates_releases():
 def test_dependabot_titles_are_deps(ecosystem):
     # the PR title decides the release; Dependabot's updates are patch releases
     assert updates(ecosystem)["commit-message"] == {"prefix": "deps"}
+
+
+# A stand-in for `gh api` (the release rule reads tags and compares commits through it): v1.0.1 sits on
+# main's side of a merge commit, v1.0.0 on both sides. p_main is the old main tip, p_feature the PR branch.
+GH_STUB = r"""
+gh() {
+  case "$*" in
+    *"/tags"*) printf 'v1.0.1 c_new\nv1.0.0 c_old\n' ;;
+    *"compare/c_new...p_main"*) echo identical ;;
+    *"compare/c_new...p_feature"*) echo diverged ;;
+    *"compare/c_old..."*) echo ahead ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+
+def test_previous_release_takes_the_highest_parent():
+    # main updated into the PR with a merge commit, then fast-forwarded: parents[0] is the PR branch
+    result = run_rule(GH_STUB + "previous_release p_feature p_main")
+    assert (result.returncode, result.stdout.strip()) == (0, "v1.0.1")
+
+
+def test_previous_release_fails_on_api_error():
+    result = run_rule(GH_STUB + "previous_release p_unknown")
+    assert result.returncode != 0
+
+
+def test_promote_uses_every_parent():
+    text = PROMOTE.read_text(encoding="utf-8")
+    assert ".parents[].sha" in text and "previous_release" in text
+
+
+def test_promote_reserves_the_version_first():
+    # the release (and its git tag) exists before any image tag moves, so the next PR cannot reuse the number,
+    # and an existing :vX.Y.Z on another digest is never moved
+    text = PROMOTE.read_text(encoding="utf-8")
+    assert text.index('-X POST "repos/$GH_REPO/releases"') < text.index("imagetools create")
+    assert "already points at" in text
+
+
+def test_promote_caps_the_notes():
+    # GitHub refuses a release body over 125000 characters; a pile-up of long Dependabot notes must not
+    # block every re-run
+    assert "notes_limit" in PROMOTE.read_text(encoding="utf-8")

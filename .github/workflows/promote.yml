@@ -73,6 +73,16 @@ jobs:
               case $status in ahead|identical) echo "$tag_name"; return 0 ;; esac
             done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' <<< "$all_tags" | sort -rV)
           }
+          # previous_release <commit>...: the highest previous_tag over the given commits; promote passes every
+          # parent of main's commit (after "Update branch" and a fast-forward, the first parent is the PR branch)
+          previous_release() {
+            local commit_sha found found_tags=""
+            for commit_sha in "$@"; do
+              found=$(previous_tag "$commit_sha") || return 1
+              [ -n "$found" ] && found_tags+="$found"$'\n'
+            done
+            printf '%s' "$found_tags" | sort -V | tail -n 1
+          }
           # <<< release rule
 
           # green <sha>: every ci job the release depends on succeeded on that commit: for each check
@@ -127,12 +137,13 @@ jobs:
           [ -n "$main_tree" ] && [ "$main_tree" = "$head_tree" ] \
             || fail "main $main_sha and the tested head $head_sha have different trees (merged while behind main?); nothing promoted"
 
-          # The version: a re-run finds the tag it made before; otherwise the rule above, from the
-          # release before main's parent. Every part below is safe to run twice.
+          # The version: a re-run finds the tag it made before; otherwise the rule above, from the highest
+          # release on any parent of main's commit. Every part below is safe to run twice.
           all_tags=$(gh api --paginate "repos/$GH_REPO/tags" --jq '.[] | "\(.name) \(.commit.sha)"')
           version=$(awk -v sha="$main_sha" '$2 == sha && $1 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ {print $1; exit}' <<< "$all_tags")
-          parent_sha=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq '.parents[0].sha')
-          previous=$(previous_tag "$parent_sha")
+          parents_text=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq '.parents[].sha')
+          mapfile -t parent_shas <<< "$parents_text"
+          previous=$(previous_release "${parent_shas[@]}")
           if [ -z "$version" ]; then
             version=$(next_version "$previous" "$pr_title") \
               || fail "the title of PR #$pr_number does not match $title_pattern; nothing promoted"
@@ -149,23 +160,15 @@ jobs:
             | jq -r '(.config // (to_entries[0].value.config)).Labels["org.opencontainers.image.version"] // empty')
           [ "$built_as" = "$version" ] \
             || fail "the image was built as ${built_as:-no version}, the release would be $version (title type changed after CI, or another release landed first); main $main_sha ships with the next release"
-
-          # dated by the main commit, not the run, so a re-run does not mint another tag
-          main_date=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq .commit.committer.date)
-          dated="$(date -u -d "$main_date" +%Y.%m.%d)-${main_sha:0:7}"
-          current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          # a version number belongs to one build: an existing :vX.Y.Z on another image is never moved
           current_version=$(docker buildx imagetools inspect "$image:$version" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
-          if [ "$current_stable" = "$digest" ] && [ "$current_version" = "$digest" ]; then
-            echo "stable and $version are already $digest"
-          else
-            # --prefer-index=false: a carbon copy of that digest, not a new index around it
-            docker buildx imagetools create --prefer-index=false \
-              --tag "$image:stable" --tag "$image:$dated" --tag "$image:$version" "$image@$digest"
-            current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}')
-            [ "$current_stable" = "$digest" ] || fail "stable is $current_stable after the copy, not the tested $digest"
+          if [ -n "$current_version" ] && [ "$current_version" != "$digest" ]; then
+            fail "$image:$version already points at $current_version, not the tested $digest; nothing promoted"
           fi
-          docker logout ghcr.io
 
+          # The release first: creating it also creates the git tag on main's commit, so the version is taken
+          # before any image tag moves. If tagging the image fails below, the next PR still numbers past it,
+          # and a re-run finds the tag and finishes.
           if gh api "repos/$GH_REPO/releases/tags/$version" > /dev/null 2>&1; then
             echo "release $version already exists"
           else
@@ -181,12 +184,31 @@ jobs:
               done | awk '!seen[$0]++' | tac)
             : > "$RUNNER_TEMP/notes.md"
             for note_pr in $pr_numbers; do
-              gh api "repos/$GH_REPO/pulls/$note_pr" --jq '"## \(.title) (#\(.number))\n\n\(.body // "")\n"' >> "$RUNNER_TEMP/notes.md"
+              gh api "repos/$GH_REPO/pulls/$note_pr" --jq '"## \(.title) (#\(.number))\n\n\((.body // "") | if length > 20000 then .[:20000] + "\n\n(cut here, the full text is in the pull request)" else . end)\n"' >> "$RUNNER_TEMP/notes.md"
             done
-            # creating the release also creates the git tag on main's commit
+            # GitHub refuses a release body over 125000 characters; cut by characters, not bytes
+            notes_limit=100000
+            jq -Rrs --argjson notes_limit "$notes_limit" \
+              'if length > $notes_limit then .[:$notes_limit] + "\n\n(cut here, see the pull requests)" else . end' \
+              "$RUNNER_TEMP/notes.md" > "$RUNNER_TEMP/notes-cut.md"
             gh api -X POST "repos/$GH_REPO/releases" -f tag_name="$version" -f target_commitish="$main_sha" \
-              -f name="$version: $pr_title" -F body=@"$RUNNER_TEMP/notes.md" -f make_latest=true > /dev/null
+              -f name="$version: $pr_title" -F body=@"$RUNNER_TEMP/notes-cut.md" -f make_latest=true > /dev/null
           fi
+
+          # then the image tags; dated by the main commit, not the run, so a re-run does not mint another tag
+          main_date=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq .commit.committer.date)
+          dated="$(date -u -d "$main_date" +%Y.%m.%d)-${main_sha:0:7}"
+          current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          if [ "$current_stable" = "$digest" ] && [ "$current_version" = "$digest" ]; then
+            echo "stable and $version are already $digest"
+          else
+            # --prefer-index=false: a carbon copy of that digest, not a new index around it
+            docker buildx imagetools create --prefer-index=false \
+              --tag "$image:stable" --tag "$image:$dated" --tag "$image:$version" "$image@$digest"
+            current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}')
+            [ "$current_stable" = "$digest" ] || fail "stable is $current_stable after the copy, not the tested $digest"
+          fi
+          docker logout ghcr.io
           echo "Released $version: $digest as stable, $dated and $version"
 
       - name: Tell the owner

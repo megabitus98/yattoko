@@ -81,6 +81,16 @@ jobs:
               case $status in ahead|identical) echo "$tag_name"; return 0 ;; esac
             done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' <<< "$all_tags" | sort -rV)
           }
+          # previous_release <commit>...: the highest previous_tag over the given commits; promote passes every
+          # parent of main's commit (after "Update branch" and a fast-forward, the first parent is the PR branch)
+          previous_release() {
+            local commit_sha found found_tags=""
+            for commit_sha in "$@"; do
+              found=$(previous_tag "$commit_sha") || return 1
+              [ -n "$found" ] && found_tags+="$found"$'\n'
+            done
+            printf '%s' "$found_tags" | sort -V | tail -n 1
+          }
           # <<< release rule
 
           # live, not from the event: a re-run reuses the event, so it would miss a title fixed since
@@ -97,7 +107,7 @@ jobs:
             fi
             sleep 10
           done
-          previous=$(previous_tag "$base_sha")
+          previous=$(previous_release "$base_sha")
           if ! version=$(next_version "$previous" "$pr_title"); then
             echo "::error::the PR title must match $title_pattern (feat: minor, fix:/deps:/docs:/... patch, type! major)"
             exit 1
