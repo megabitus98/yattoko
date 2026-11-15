@@ -432,3 +432,17 @@
 - **Task 13:** Redaction also masks every configured proxy exit URL as a whole (spec 6.7/6.10), and the credentials regex handles a raw `@` inside a password (`http://user:p@ss@host:1` must not leak `ss@host` credentials; split at the last `@` like `urllib.parse`). `ConfigError` messages from `parse_id_list`/`parse_bool` name the variable but never echo the raw value.
 - **Task 14:** `get_env` no longer exists; port upstream's VIP/rclone/ffmpeg settings with the Task 2 helpers (`_bool_env`, `_int_env`, `parse_bool`). When a table gains columns (users: `free`, `paid`, `config`), call `database.migrate.ensure_columns` at startup so an existing slice-1 database is upgraded. Update README configuration table and `.env.example`.
 - **Task 16:** `tests/repo/test_repo.py` lists `.github/dependabot.yml` as a removed file; remove it from that list when Task 16 creates the new one. Run `tests/repo` in CI with `fetch-depth: 0` (it needs commit `0d5bfcd`).
+
+### Added after the first real test (2026-11-15) and the slice 2-3 reviews
+
+- **Task 15:** the regression run goes through the bot's whole download path, not `attempt()` alone: build a `YoutubeDownload` with a stub client and progress message (no Telegram) and call `_download_fitting()`, so the format ladder, the per-site rules, the size guard and the `ENABLE_FFMPEG` conversion are all exercised. Run it with `ENABLE_FFMPEG=true` (the owner's deployment) and the default quality (1440p).
+- **Task 15:** expectations come from the real test: every result has a video stream whose codec is `h264`, or `hevc` with tag `hvc1` (TikTok), and an audio stream (Instagram has audio: HE-AAC, confirmed 2026-11-15, so `audio: true` for it too). A result with only audio is `downloader_broken` (TikTok once came back as its mp3). The YouTube Short's smaller side is at least 1080 when the source has it (it once came back 480x854). With `ENABLE_FFMPEG`, the Instagram reel's smaller side is 1080 (VP9 converted to H.264). Record in each JSON line `width`, `height` and `vtag`.
+- **Task 16:** `ci.yml` runs the unit tests in the `test` image, which has ffmpeg (`tests/test_transcode.py` converts real clips; it skips only where ffmpeg is missing).
+- **Later (no task yet; the owner decides):**
+  - `engine/errors.py`: `captcha` has no word boundary (`xcaptchaxyz` in a video ID reads as blocked); the bare `log ?in` pattern also runs over the bot's own text (a host such as `login.example.com`); `__context__` in the chain can turn a handled 403 into `blocked` for a later private-video error; curl-cffi's `TransportError ... over proxy <host>` comes out as `other`, not `blocked`.
+  - Flood: `_upload()` writes the file_id cache before `edit_text(BotText.done)`, so a FloodWait there sends the file twice on the retry; flood retries have no limit.
+  - `_download_fitting()` retries one quality lower even when quality does not change the format (send as audio, Google Drive), starts again at the first exit and lists the exits twice in an owner notice.
+  - `JOB_TIMEOUT`, the size limit and `TMP_BUDGET` are checked in progress callbacks and around the H.264 conversion, not during extraction or upload.
+  - The Alpine image has no tz database, so APScheduler (only with `ENABLE_VIP`) resets the free quota at 00:00 UTC unless `TZ` is set and `tzdata` installed.
+  - `PROXY_PIN` defaults to nothing; the deployment must set `PROXY_PIN=instagram=direct` (spec 6.7).
+  - TikTok age-restricted posts need `tiktok.txt` cookies (login_required, as designed).
