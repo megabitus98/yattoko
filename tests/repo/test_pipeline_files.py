@@ -75,25 +75,34 @@ def test_docker_python_minor_ignored():
     assert set(rule["update-types"]) == {"version-update:semver-minor", "version-update:semver-major"}
 
 
-def _without_except(node):
+def _except_cidrs(node):
     if isinstance(node, dict):
-        return {k: _without_except(v) for k, v in node.items() if k != "except"}
+        return [c for k, v in node.items() for c in (v if k == "except" else _except_cidrs(v))]
     if isinstance(node, list):
-        return [_without_except(v) for v in node]
-    return node
+        return [c for v in node for c in _except_cidrs(v)]
+    return []
+
+
+def _private_addresses(text, is_yaml):
+    # scans the raw text, comments included; only the exact CIDRs listed under `except:` are allowed
+    allowed = {str(c) for d in yaml.safe_load_all(text) for c in _except_cidrs(d)} if is_yaml else set()
+    return [
+        a
+        for a in IPV4.findall(text)
+        if a not in allowed and any(ipaddress.ip_network(a, strict=False).subnet_of(p) for p in RFC1918)
+    ]
+
+
+def test_address_scan_reads_comments():
+    planted = "# Egress (home proxy 192.168.1.5)\nexcept:\n  - 10.0.0.0/8 # private, proxy at 10.1.2.3\n"
+    assert _private_addresses(planted, is_yaml=True) == ["192.168.1.5", "10.1.2.3"]
 
 
 def test_example_has_no_real_addresses():
     files = sorted(DEPLOY.iterdir())
     assert {p.name for p in files} >= {"kubernetes.example.yaml", "README.md"}
-    texts = []
-    for path in files:
-        text = path.read_text(encoding="utf-8")
-        assert "t.me" not in text, path.name
-        if path.suffix == ".yaml":
-            docs = [_without_except(d) for d in yaml.safe_load_all(text)]
-            text = yaml.safe_dump_all(docs)
-        texts.append(text)
-    found = [ipaddress.ip_network(a, strict=False) for t in texts for a in IPV4.findall(t)]
-    assert found, "the example names no addresses at all"
-    assert [str(n) for n in found if any(n.subnet_of(p) for p in RFC1918)] == []
+    texts = {p.name: p.read_text(encoding="utf-8") for p in files}
+    assert [name for name, text in texts.items() if "t.me" in text] == []
+    assert any(IPV4.findall(t) for t in texts.values()), "the example names no addresses at all"
+    found = {name: _private_addresses(text, name.endswith(".yaml")) for name, text in texts.items()}
+    assert {name: a for name, a in found.items() if a} == {}
