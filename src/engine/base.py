@@ -68,6 +68,7 @@ def generate_input_media(file_paths: list, cap: str) -> list:
             input_media.append(types.InputMediaDocument(media=path))
 
     input_media[0].caption = cap
+    input_media[0].parse_mode = enums.ParseMode.DISABLED
     return input_media
 
 
@@ -209,6 +210,8 @@ class BaseDownloader(ABC):
                 "chat_id": chat_id,
                 file_arg_name: files[0],
                 "caption": caption,
+                # plain text: a title with "<i" or "*" is not formatting
+                "parse_mode": enums.ParseMode.DISABLED,
                 "progress": self.upload_hook,
                 **kwargs,
             }
@@ -238,7 +241,8 @@ class BaseDownloader(ABC):
         try:
             thumb = Path(video_path).parent.joinpath(f"{uuid.uuid4().hex}-thunmnail.jpg").as_posix()
             # ffmpeg -i video.mp4 -map 0:v -map -0:V -c copy cover.jpg
-            subprocess.run(["ffmpeg", "-y", "-i", video_path, "-map", "0:v", "-map", "-0:V", "-c", "copy", thumb], check=True, text=True)
+            # output captured: ffmpeg's banner and stream dump would fill the bot log on every upload
+            subprocess.run(["ffmpeg", "-y", "-i", video_path, "-map", "0:v", "-map", "-0:V", "-c", "copy", thumb], check=True, capture_output=True, text=True)
         except Exception:
             thumb = None
 

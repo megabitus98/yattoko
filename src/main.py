@@ -123,7 +123,7 @@ def start_handler(client: Client, message: types.Message):
     client.send_message(
         from_id,
         text,
-        disable_web_page_preview=True,
+        link_preview_options=types.LinkPreviewOptions(is_disabled=True),
     )
 
 
@@ -131,14 +131,14 @@ def help_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    client.send_message(chat_id, BotText.help, disable_web_page_preview=True)
+    client.send_message(chat_id, BotText.help, link_preview_options=types.LinkPreviewOptions(is_disabled=True))
 
 
 def about_handler(client: Client, message: types.Message):
     chat_id = message.chat.id
     init_user(chat_id)
     client.send_chat_action(chat_id, enums.ChatAction.TYPING)
-    client.send_message(chat_id, BotText.about, disable_web_page_preview=True)
+    client.send_message(chat_id, BotText.about, link_preview_options=types.LinkPreviewOptions(is_disabled=True))
 
 
 def ping_handler(client: Client, message: types.Message):
@@ -425,7 +425,7 @@ def download_handler(client: Client, message: types.Message):
                 chat_id=reply.chat.id,
                 message_id=reply.id,
                 text=text,
-                disable_web_page_preview=True,
+                link_preview_options=types.LinkPreviewOptions(is_disabled=True),
                 parse_mode=enums.ParseMode.HTML,
             )
             return

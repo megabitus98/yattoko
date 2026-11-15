@@ -376,3 +376,22 @@ def test_too_long_to_convert_downloads_again_h264_first(fake_ydl, monkeypatch):
     assert second.params["format"].startswith("best/")  # Instagram's H.264 file
     assert list(Path(downloader._tempdir.name).iterdir()) == []  # emptied before the second download
     assert edits == []
+
+
+def test_caption_is_plain_text(tmp_path):
+    # a title with "<i" or "*" must not be read as formatting (kurigram: "Unclosed tags: <i>")
+    from pyrogram import enums
+
+    sent = []
+    downloader, _ = fake_downloader("https://www.youtube.com/watch?v=x")
+    # _methods looks up every send_* method, so the fake client has them all
+    record = lambda **kwargs: sent.append(kwargs)
+    downloader._client = SimpleNamespace(
+        send_chat_action=lambda *a, **k: None, send_video=record, send_document=record,
+        send_audio=record, send_animation=record, send_photo=record,
+    )
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"x")
+    downloader.send_something(chat_id=1, files=[video], _type="video", caption="<i>title *x*")
+    assert sent[0]["caption"] == "<i>title *x*"
+    assert sent[0]["parse_mode"] == enums.ParseMode.DISABLED

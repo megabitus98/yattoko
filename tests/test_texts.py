@@ -53,4 +53,11 @@ def test_about_without_link_preview():
         send_message=lambda chat_id, text, **kwargs: sent.append((text, kwargs)),
     )
     main.about_handler(client, fake_message("/about")[0])
-    assert sent == [(BotText.about, {"disable_web_page_preview": True})]
+    assert [text for text, _ in sent] == [BotText.about]
+    assert sent[0][1]["link_preview_options"].is_disabled is True
+
+
+def test_no_deprecated_preview_argument():
+    # kurigram 2.2.27 logs a deprecation warning for every disable_web_page_preview call
+    src = Path(__file__).parents[1] / "src"
+    assert [p.name for p in src.rglob("*.py") if "disable_web_page_preview" in p.read_text()] == []

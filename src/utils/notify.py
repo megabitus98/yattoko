@@ -8,7 +8,7 @@ import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
-from pyrogram import enums
+from pyrogram import enums, types
 
 from config import BotText
 from database.model import claim_notice
@@ -27,7 +27,7 @@ def send_to_owners(client, owners: Iterable[int], text: str) -> int:
                 owner_id,
                 text,
                 parse_mode=enums.ParseMode.DISABLED,
-                disable_web_page_preview=True,
+                link_preview_options=types.LinkPreviewOptions(is_disabled=True),
             )
             sent += 1
         except Exception:
