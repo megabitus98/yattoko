@@ -1,10 +1,15 @@
 # Modified 2026 by megabitus98 (fork): new file (spec 6.14): uv daily with yt-dlp alone and uncooled,
 # docker weekly without Python minor or major bumps, github-actions weekly and grouped.
 # ci.yml's merge job merges only the uv PRs; docker and github-actions PRs wait for the owner.
+# Every PR title starts with deps:, a patch release.
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
+    # the PR title decides the release (see "Versions" in README.md): "deps: bump ..." is a patch;
+    # Dependabot adds the colon after a prefix that ends in a letter
+    commit-message:
+      prefix: "deps"
     schedule:
       interval: daily
     # yt-dlp is its own PR at once (site fixes are urgent); everything else waits 3 days, in one PR
@@ -18,6 +23,10 @@ updates:
 
   - package-ecosystem: docker
     directory: /
+    # the PR title decides the release (see "Versions" in README.md): "deps: bump ..." is a patch;
+    # Dependabot adds the colon after a prefix that ends in a letter
+    commit-message:
+      prefix: "deps"
     schedule:
       interval: weekly
     ignore:
@@ -27,6 +36,10 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    # the PR title decides the release (see "Versions" in README.md): "deps: bump ..." is a patch;
+    # Dependabot adds the colon after a prefix that ends in a letter
+    commit-message:
+      prefix: "deps"
     schedule:
       interval: weekly
     groups:

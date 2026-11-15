@@ -288,3 +288,9 @@ def test_promote_creates_releases():
     assert promote["permissions"]["contents"] == "write"
     text = PROMOTE.read_text(encoding="utf-8")
     assert "repos/$GH_REPO/releases" in text and "org.opencontainers.image.version" in text
+
+
+@pytest.mark.parametrize("ecosystem", ["uv", "docker", "github-actions"])
+def test_dependabot_titles_are_deps(ecosystem):
+    # the PR title decides the release; Dependabot's updates are patch releases
+    assert updates(ecosystem)["commit-message"] == {"prefix": "deps"}
