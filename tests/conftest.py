@@ -39,6 +39,8 @@ os.environ.update(
                 "TMP_BUDGET",
                 "JOB_TIMEOUT",
                 "OWN_PUBLIC_IPS",
+                "PROXY_EXITS",
+                "PROXY_PIN",
             ],
             "",
         ),

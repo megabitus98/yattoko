@@ -2,10 +2,11 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower, owner notice when the Instagram cookies stopped working, exits tried recorded
+# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower, owner notice when the Instagram cookies stopped working, exits tried recorded, PROXY_EXITS tried in order on blocked errors (pinned sites never fall back)
 
 import logging
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,13 +20,14 @@ from config import (
     COOKIES_DIR,
     OWN_PUBLIC_IPS,
     PREFERRED_AUDIO_LANG,
-    YT_DLP_PROXY,
+    PROXY_EXITS,
+    PROXY_PIN,
 )
 
 from engine.base import BaseDownloader
 from engine.cookies import cookie_options, instagram_session_present
-from engine.errors import RefusedContent, tell_owners
-from engine.proxy import ydl_proxy
+from engine.errors import RefusedContent, classify, tell_owners
+from engine.proxy import exit_label, exits_for, ydl_proxy
 from engine.sites import site_for_url
 from utils import netcheck
 
@@ -204,25 +206,40 @@ class YoutubeDownload(BaseDownloader):
                 }
             }
 
-        # again before the attempt: the name may resolve differently than when the job was queued
-        netcheck.check_url(self._url, OWN_PUBLIC_IPS)
-        exit = YT_DLP_PROXY or "direct"
-        self._exits_tried.append(exit)
-        attempt(
-            self._url,
-            site,
-            exit,
-            ydl_opts,
-            Path(self._tempdir.name),
-            on_cookies_expired=lambda: tell_owners(
-                self._client,
-                self._url,
-                "cookies_expired",
-                BotText.owner_cookies_expired.format(site=site),
-                self._exits_tried,
-            ),
-        )
-        return list(Path(self._tempdir.name).glob("*"))
+        tmpdir = Path(self._tempdir.name)
+        exits = exits_for(site, PROXY_EXITS, PROXY_PIN)
+        for number, exit in enumerate(exits, 1):
+            if number > 1:
+                # empty: a blocked attempt's partial files must not be resumed or sent
+                shutil.rmtree(tmpdir)
+                tmpdir.mkdir()
+            # before every attempt, proxied ones too: a proxy on the home network would fetch LAN
+            # addresses for us, and the name may resolve differently than when the job was queued
+            netcheck.check_url(self._url, OWN_PUBLIC_IPS)
+            # labels only: proxy URLs are secrets
+            label = exit_label(exit, PROXY_EXITS)
+            self._exits_tried.append(label)
+            try:
+                attempt(
+                    self._url,
+                    site,
+                    exit,
+                    ydl_opts,
+                    tmpdir,
+                    on_cookies_expired=lambda: tell_owners(
+                        self._client,
+                        self._url,
+                        "cookies_expired",
+                        BotText.owner_cookies_expired.format(site=site),
+                        self._exits_tried,
+                    ),
+                )
+                return list(tmpdir.glob("*"))
+            except Exception as e:
+                # only a block is worth another exit; the last one's error goes to BaseDownloader.start()
+                if number == len(exits) or classify(e) != "blocked":
+                    raise
+                logging.warning("%s blocked through %s, trying the next exit", self._url, label)
 
     def _start(self):
         # start download and upload, no cache hit

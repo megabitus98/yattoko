@@ -4,12 +4,13 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages
 
 __author__ = "Benny <benny.think@gmail.com>"
 
 import ipaddress
 import os
+from urllib.parse import urlsplit
 
 
 class ConfigError(Exception):
@@ -31,9 +32,8 @@ def parse_id_list(raw: str | None, name: str) -> frozenset[int]:
         try:
             ids.add(int(item))
         except ValueError:
-            raise ConfigError(
-                f"{name} must be a comma-separated list of numeric Telegram IDs, got {item!r}"
-            ) from None
+            # no value in the message: the IDs are private
+            raise ConfigError(f"{name} must be a comma-separated list of numeric Telegram IDs") from None
     return frozenset(ids)
 
 
@@ -50,6 +50,41 @@ def parse_ip_list(raw: str | None, name: str) -> frozenset[str]:
     return frozenset(ips)
 
 
+def parse_exits(raw: str | None) -> list[str]:
+    # Ordered download exits: "direct" (no proxy) or an http(s) proxy URL. Not SOCKS: ffmpeg gets the
+    # proxy only through HTTP_PROXY and has no SOCKS support. No value in any message: proxy URLs are secrets.
+    exits = []
+    for item in (raw or "").split(","):
+        if not (item := item.strip()):
+            continue
+        if item != "direct":
+            try:
+                parts = urlsplit(item)
+                valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+                parts.port  # raises on a port that is not a number
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ConfigError("PROXY_EXITS items must be direct or an http:// or https:// proxy URL")
+        exits.append(item)
+    return list(dict.fromkeys(exits)) or ["direct"]
+
+
+def parse_pins(raw: str | None, exits: list[str]) -> dict[str, str]:
+    # site=exit pairs, the site as engine/sites.py names it (instagram, youtube, tiktok, ...)
+    pins = {}
+    for item in (raw or "").split(","):
+        if not (item := item.strip()):
+            continue
+        site, _, exit = (part.strip() for part in item.partition("="))
+        if not site or not exit:
+            raise ConfigError("PROXY_PIN must be comma-separated site=exit pairs")
+        if exit not in exits:
+            raise ConfigError("PROXY_PIN: every pinned exit must be one of PROXY_EXITS")
+        pins[site.lower()] = exit
+    return pins
+
+
 def parse_bool(raw: str | None, default: bool) -> bool:
     if raw is None:
         return default
@@ -58,7 +93,7 @@ def parse_bool(raw: str | None, default: bool) -> bool:
         return True
     if value in ("false", "0", "no"):
         return False
-    raise ConfigError(f"expected true/false/1/0/yes/no, got {raw!r}")
+    raise ConfigError("expected true/false/1/0/yes/no")
 
 
 def check_paths(data_dir: str, tmp_dir: str) -> None:
@@ -93,7 +128,6 @@ WORKERS: int = _int_env("WORKERS", 16)
 APP_ID: int | None = _int_env("APP_ID", None)
 APP_HASH = _raw("APP_HASH")
 BOT_TOKEN = _raw("BOT_TOKEN")
-YT_DLP_PROXY = _raw("YT_DLP_PROXY") or ""
 
 # access: env names stay OWNER and AUTHORIZED_USER; an empty list allows nobody
 OWNERS = parse_id_list(os.getenv("OWNER"), "OWNER")
@@ -134,5 +168,9 @@ TMP_BUDGET: int = _int_env("TMP_BUDGET", MAX_PARALLEL_JOBS * 4500 * 1024 * 1024)
 JOB_TIMEOUT: int = _int_env("JOB_TIMEOUT", 2700)
 # the home's own static public IPs; links that resolve to them are refused
 OWN_PUBLIC_IPS = parse_ip_list(os.getenv("OWN_PUBLIC_IPS"), "OWN_PUBLIC_IPS")
+# yt-dlp tries these in order and moves on only when one is blocked; uploads to Telegram never use them
+PROXY_EXITS = parse_exits(os.getenv("PROXY_EXITS"))
+# a pinned site uses only its exit and never falls back, e.g. instagram=direct
+PROXY_PIN = parse_pins(os.getenv("PROXY_PIN"), PROXY_EXITS)
 
 CAPTION_URL_LENGTH_LIMIT = 150

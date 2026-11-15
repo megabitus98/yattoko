@@ -32,6 +32,32 @@ def test_redact_token_and_proxy(monkeypatch):
     assert "abc123" not in cookies and "def456" not in cookies
 
 
+def test_redact_at_in_password():
+    # split at the last @ of the authority, as urllib.parse does
+    assert (
+        redact("via http://user:p@ss@host.example:1/x")
+        == "via http://***@host.example:1/x"
+    )
+    # an @ after the authority is not a credential
+    for text in (
+        "https://www.tiktok.com/@a/video/1",
+        "https://example.com/x?mail=a@b.example",
+    ):
+        assert redact(text) == text
+
+
+def test_redact_masks_configured_exits(monkeypatch):
+    exits = ["direct", PROXY, "http://plain.example:3128"]
+    monkeypatch.setattr(config.config, "PROXY_EXITS", exits)
+    text = redact(f"via {PROXY} then http://plain.example:3128 then direct")
+    assert (
+        "secret" not in text
+        and "proxy.example" not in text
+        and "plain.example" not in text
+    )
+    assert text.endswith("then direct")
+
+
 def test_formatter_redacts_traceback():
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)

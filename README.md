@@ -29,7 +29,7 @@ A Telegram bot for a small allow-listed group of people. Send it a link in a pri
 
 ## Configuration
 
-Everything is set through environment variables (or a `.env` file, see `.env.example`). A blank value (`VAR=`) means the default. An invalid value (a non-numeric ID, a boolean that is not `true`/`false`/`1`/`0`/`yes`/`no`, a non-integer number) stops the bot at startup.
+Everything is set through environment variables (or a `.env` file, see `.env.example`). A blank value (`VAR=`) means the default. An invalid value (a non-numeric ID, a boolean that is not `true`/`false`/`1`/`0`/`yes`/`no`, a non-integer number, a proxy exit that is not `direct` or an http(s) URL, a pin to an exit that is not listed) stops the bot at startup.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -50,7 +50,8 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `OWN_PUBLIC_IPS` | empty | Comma-separated static public IPs of your own network. Links that resolve to them are refused |
 | `AUDIO_FORMAT` | `m4a` | Audio format preferred when a user sends as audio |
 | `PREFERRED_AUDIO_LANG` | empty | Audio language to prefer, e.g. `en`. Empty: the original track |
-| `YT_DLP_PROXY` | empty | Proxy for yt-dlp, e.g. `http://proxy.example:8080`. Empty: direct connection |
+| `PROXY_EXITS` | `direct` | Comma-separated exits yt-dlp tries in order, e.g. `direct,http://proxy.example:8080`. `direct` is no proxy; the others are `http://` or `https://` proxy URLs (no SOCKS: ffmpeg cannot use it). The next exit is tried only when a site blocks the current one. Uploads to Telegram never use them. Use exits with distinct public IPs. Proxy URLs are secrets: they never appear in logs or messages |
+| `PROXY_PIN` | empty | Comma-separated `site=exit` pairs, e.g. `instagram=direct`. A pinned site uses only that exit and never falls back. The exit must be in `PROXY_EXITS`; the site is the cookies file name below (`instagram`, `youtube`, `tiktok`, ...) |
 | `COOKIES_DIR` | `/cookies` | Directory with one Netscape cookies file per site, see below |
 | `POTOKEN` | empty | YouTube only: a PO token, see yt-dlp's [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) |
 | `ENABLE_SEARCH` | `false` | Text without a link searches YouTube. Off: the bot asks for a link |
@@ -94,13 +95,14 @@ This list is written from the code at this fork's head, compared with Katze-942/
 - **State.** SQLite under `DATA_DIR` with WAL and a 30 s busy timeout; the Telegram session file sits next to it. `src/database/migrate.py` holds a check-and-`ALTER` helper for columns added later. The bot refuses to start when `TMPFILE_PATH` and `DATA_DIR` overlap. No MySQL driver.
 - **Cookies and Instagram.** One cookies file per site in `COOKIES_DIR` instead of a YouTube-only `youtube-cookies.txt` in the working directory; yt-dlp gets an in-memory copy, so the mounted file is never written. `BROWSERS` (cookies from a browser) is gone. Instagram goes through yt-dlp; the `/spdl` Instagram engine and its call to an external service are removed.
 - **Downloads in a queue.** Handlers hand each download to a pool of `MAX_PARALLEL_JOBS` (default 2) and return at once; waiting users see their place in the queue. A download stops when it grows past `TG_NORMAL_MAX_SIZE` (even when the size is not known in advance), when all downloads together go over `TMP_BUDGET`, or after `JOB_TIMEOUT`. A finished file over the limit is downloaded once more one quality lower before the bot says it is too large; the old "try /direct" text is gone.
+- **Proxy fallback.** `PROXY_EXITS` replaces `YT_DLP_PROXY` with an ordered list of exits, tried one after another only when a site blocks the download; `PROXY_PIN` keeps a site (Instagram, for its login) on one exit. Each attempt extracts and downloads through the same exit, after its own host check. Logs and owner notices name an exit by its position (`exit 2`), never by URL.
 - **Host check.** Before any download the link must be http(s) and its host must resolve to public IPv4 addresses only, none of them in `OWN_PUBLIC_IPS`; otherwise the user gets "This video is private, deleted or not available here." It is defence in depth: redirects and addresses inside pages get past it, so an egress network policy is still needed.
 - **Cache and health.** One in-process file cache shared by every job, with SponsorBlock in the key. A heartbeat file for container probes (`python health.py`).
-- **Logs and errors.** One log formatter redacts the bot token, credentials in URLs and cookie values, tracebacks included. yt-dlp runs without verbose output and logs through it. Users never see exception text, only "Something went wrong with this download."
+- **Logs and errors.** One log formatter redacts the bot token, the configured proxy exits, credentials in URLs and cookie values, tracebacks included. yt-dlp runs without verbose output and logs through it. Users never see exception text, only "Something went wrong with this download."
 - **Build.** uv with a lock file instead of PDM, Python 3.12, kurigram 2.2.27, yt-dlp with curl-cffi for browser impersonation. Alpine image pinned by digest, non-root user, caches and scratch under `/tmp` so the root filesystem can be read-only, `runtime` and `test` targets, and `python main.py --self-check`.
 - **Repository.** Donation and payment material, the upstream public bot links and images, the old workflows and Dependabot file, and the Redis and MySQL compose services are gone. A unit test suite lives in `tests/`.
 
-Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads, `YT_DLP_PROXY`. Still absent, as in Katze-942/ytdlbot: VIP quota, payments and `/buy`.
+Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads. Still absent, as in Katze-942/ytdlbot: VIP quota, payments and `/buy`.
 
 ## License
 
