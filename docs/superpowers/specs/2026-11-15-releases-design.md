@@ -37,15 +37,22 @@ Today every promoted merge moves `stable` and gets a dated image tag (`2026.11.1
 
 ## Approach (chosen)
 
-The version is computed twice from the same inputs and must agree:
+The version is computed twice, from the same rule, and must agree:
 
-1. **Title check (new job `title` in `ci.yml`, read-only, GitHub runner):** the PR title must match `^(feat|fix|deps|docs|ci|test|build|chore|refactor|perf)(\([a-z0-9-]+\))?!?: .+`. A PR with another title fails CI and cannot be promoted. Editing the title triggers the check again (`pull_request` type `edited`).
-2. **Build (`unit`):** next version = latest `v*.*.*` tag on the PR's base history (`v0.0.0` if none) bumped by the title's type; no tag at all makes the first release `v1.0.0` whatever the type. Baked as build args into the image: `APP_VERSION`, `APP_RELEASE_TITLE` (the PR title) and `APP_RELEASE_URL` (`<server>/<repo>/releases/tag/<version>`), as env vars and as the label `org.opencontainers.image.version`.
-3. **Promote:** after its existing checks it reads the PR title again, computes the next version from the latest tag in the same way, reads the image's version label and fails (with the existing promote-failed message) when they differ or the tag already exists. Otherwise it tags the image `vX.Y.Z` (with `stable` and the dated tag, one `imagetools create`), creates the git tag on the `main` commit and a GitHub Release (title = version and PR title, body = PR body, marked latest).
+1. **Title and build (`unit`):** `unit` reads the PR title live from the API (not from the event payload, which a re-run reuses unchanged, so a re-run after fixing a title sees the new one) and fails at once, before the build, unless it matches `^(feat|fix|deps|docs|ci|test|build|chore|refactor|perf)(\([a-z0-9-]+\))?!?: .+`. The base is the commit on `main` the PR is built on. If a `promote` run for that commit is queued or running, `unit` waits for it (bounded, about 15 minutes; it needs `actions: read`). Next version = the nearest `v*.*.*` tag on the base's history, bumped by the title's type; no tag at all makes the first release `v1.0.0` whatever the type. Baked as build args into the image: `APP_VERSION`, `APP_RELEASE_TITLE` (the PR title) and `APP_RELEASE_URL` (`<server>/<repo>/releases/tag/<version>`), as env vars and as the label `org.opencontainers.image.version`.
+2. **Promote:** after its existing checks it reads the PR title again, computes the next version from the nearest tag on the parent of the `main` commit with the same rule, reads the image's version label, and fails (with the existing promote-failed message) when they differ or the tag already exists. Otherwise it tags the image `vX.Y.Z` (with `stable` and the dated tag, one `imagetools create`), creates the git tag on the `main` commit and a GitHub Release (title = version and PR title, body = the notes of every PR merged since the previous tag, newest first; normally just this one; marked latest).
 
-Why the two computations agree: a PR is promoted only when `main`'s tree equals its tested tree, so it was built on top of the latest release. The race (PR B built while PR A's promote has not tagged yet) produces the same version twice; promote B then finds the tag taken and fails safely, and a re-run of B's CI fixes it.
+Why the two computations agree: a PR is promoted only when `main`'s tree equals its tested tree, so its base is the commit just before it on `main`, and `unit` waited until that base had its tag.
 
-`promote` must be the only job with `contents: write`, and gains it only for the tag and the release.
+When they still differ, the commit is not released and ships with the next release, the same as a direct push to `main` today (the next release's notes list it). Two causes remain, and the failure message names them: the title's type was changed after CI (to release this PR as it is, push a new commit to it before merging, so the image is built again: `push` never replaces an existing `sha-<head>` image, so a re-run alone does not help), or a promote race the wait did not catch.
+
+### Why there is no separate title job (builder check, my call)
+
+A `title` job on `pull_request: edited` inside `ci.yml` would clash with three rules: the `ci-<pr>` concurrency group cancels a running regression on every title or body edit; `notify` would report that cancel as a failure (the head did not change); and promote's `green()` takes the newest run of each check, so skipped edit runs would block the release. Checking the title in `unit` avoids all three, and promote checks it again.
+
+### Write tokens
+
+`promote` gains `contents: write` for the tag and the release (`merge` already holds it to merge). It still checks out nothing and runs no action.
 
 ### Approaches considered
 
@@ -74,4 +81,6 @@ Why the two computations agree: a PR is promoted only when `main`'s tree equals 
 - Exact names: the new job, the SQLite table, build-arg and env names if better ones fit.
 - How the tag is found (`git tag --merged`, `git describe`, or the API) as long as `unit` and `promote` use the same rule.
 - The wording of the announcement and the `/about` line.
-- Tests: `promote` holds a write token, so it checks out nothing and cannot share a helper file with `unit`; the bump rule is written in both workflows, and a repository test checks that both copies are the same (and that the title regex is the same in the `title` job). Pipeline tests for the new permission and the title check.
+- Tests: `promote` holds a write token, so it checks out nothing and cannot share a helper file with `unit`; the bump rule and the title regex are written in both workflows, and a repository test checks that both copies are the same. Pipeline tests for the new permissions (`actions: read` on `unit`, `contents: write` on `promote`) and the title check.
+- Promote's step order, and what a re-run does after a partial failure (image tagged but no release yet, or the `stable == digest` early exit): a re-run must finish a half-done release, never mint a second version.
+- Dependabot PRs already open when this lands have titles without `deps:`; `@dependabot recreate` or a manual title edit plus a re-run fixes them.
