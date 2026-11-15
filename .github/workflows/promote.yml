@@ -4,6 +4,10 @@
 # regression all green on that head, and the same tree. A commit that came from no PR (a direct push)
 # promotes nothing and ships with the next tested update. A PR merge that does not match fails the run
 # and the owner gets a message through the test bot (GitHub tells only whoever started a run, often a bot).
+# Each promote is a release vX.Y.Z, numbered by the release rule from the PR title: the image also gets
+# that tag, and a GitHub Release (with its git tag) carries the notes of the PRs since the previous one.
+# The image must have been built as that version (ci.yml's unit); if not, nothing is released and the
+# commit ships with the next release.
 # Modified 2026 by megabitus98 (fork): new workflow
 
 name: promote
@@ -33,10 +37,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read # commits and trees
+      contents: write # commits and trees; the release and its tag
       pull-requests: read # the PR a commit came from
       checks: read # unit, scan, push and regression on the tested head
-      packages: write # tag stable
+      packages: write # tag stable, the dated tag and vX.Y.Z
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -91,55 +95,106 @@ jobs:
           main_sha=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
           : "${main_sha:?}"
           main_tree=$(tree_of "$main_sha")
-          head_sha=""
-          if [ -n "$given_head" ]; then
+
+          # the PR main came from: its title decides the release; GitHub can take a moment to link a
+          # brand-new commit to its PR
+          pr_json=""
+          for attempt in 1 2 3 4 5 6; do
+            pr_json=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
+              --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0] // empty")
+            [ -n "$pr_json" ] && break
+            [ "$attempt" = 6 ] || sleep 10
+          done
+          if [ -z "$pr_json" ] && [ -n "$given_head" ]; then
             [[ "$given_head" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha '$given_head' is not a commit SHA"
-            # main may have moved on since the merge that passed this head; then look main up instead
-            [ "$(tree_of "$given_head")" = "$main_tree" ] && head_sha=$given_head
+            pr_json=$(gh api "repos/$GH_REPO/commits/$given_head/pulls" \
+              --jq "[.[] | select(.head.sha == \"$given_head\")][0] // empty")
           fi
-          if [ -z "$head_sha" ]; then
-            # GitHub can take a moment to link a brand-new commit to its PR
-            for attempt in 1 2 3 4 5 6; do
-              head_sha=$(gh api "repos/$GH_REPO/commits/$main_sha/pulls" \
-                --jq "[.[] | select(.merge_commit_sha == \"$main_sha\")][0].head.sha // empty")
-              [ -n "$head_sha" ] && break
-              [ "$attempt" = 6 ] || sleep 10
-            done
-          fi
-          if [ -z "$head_sha" ]; then
+          if [ -z "$pr_json" ]; then
             echo "::notice::main $main_sha came from no pull request; stable stays as it is and this commit ships with the next tested update"
             exit 0
+          fi
+          pr_number=$(jq -r .number <<< "$pr_json")
+          pr_title=$(jq -r .title <<< "$pr_json")
+          head_sha=$(jq -r .head.sha <<< "$pr_json")
+          if [ -n "$given_head" ]; then
+            [[ "$given_head" =~ ^[0-9a-f]{40}$ ]] || fail "head_sha '$given_head' is not a commit SHA"
+            # main may have moved on since the merge that passed this head; then main's own PR decides
+            [ "$(tree_of "$given_head")" = "$main_tree" ] && head_sha=$given_head
           fi
           green "$head_sha" || fail "the tested head $head_sha of main $main_sha is not green; nothing promoted"
           head_tree=$(tree_of "$head_sha")
           [ -n "$main_tree" ] && [ "$main_tree" = "$head_tree" ] \
             || fail "main $main_sha and the tested head $head_sha have different trees (merged while behind main?); nothing promoted"
 
+          # The version: a re-run finds the tag it made before; otherwise the rule above, from the
+          # release before main's parent. Every part below is safe to run twice.
+          all_tags=$(gh api --paginate "repos/$GH_REPO/tags" --jq '.[] | "\(.name) \(.commit.sha)"')
+          version=$(awk -v sha="$main_sha" '$2 == sha && $1 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ {print $1; exit}' <<< "$all_tags")
+          parent_sha=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq '.parents[0].sha')
+          previous=$(previous_tag "$parent_sha")
+          if [ -z "$version" ]; then
+            version=$(next_version "$previous" "$pr_title") \
+              || fail "the title of PR #$pr_number does not match $title_pattern; nothing promoted"
+            if gh api "repos/$GH_REPO/git/ref/tags/$version" > /dev/null 2>&1; then
+              fail "$version is already a tag on another commit; main $main_sha ships with the next release"
+            fi
+          fi
+
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           digest=$(docker buildx imagetools inspect "$image:sha-$head_sha" --format '{{.Manifest.Digest}}') \
             || fail "no image $image:sha-$head_sha; nothing promoted"
-          stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
-          if [ "$stable" = "$digest" ]; then
-            echo "stable is already $digest"
-            exit 0
-          fi
+          # the version unit baked in must be this release (single image or one entry per platform)
+          built_as=$(docker buildx imagetools inspect "$image@$digest" --format '{{json .Image}}' \
+            | jq -r '(.config // (to_entries[0].value.config)).Labels["org.opencontainers.image.version"] // empty')
+          [ "$built_as" = "$version" ] \
+            || fail "the image was built as ${built_as:-no version}, the release would be $version (title type changed after CI, or another release landed first); main $main_sha ships with the next release"
+
           # dated by the main commit, not the run, so a re-run does not mint another tag
           main_date=$(gh api "repos/$GH_REPO/commits/$main_sha" --jq .commit.committer.date)
-          release="$(date -u -d "$main_date" +%Y.%m.%d)-${main_sha:0:7}"
-          # --prefer-index=false: a carbon copy of that digest, not a new index around it
-          docker buildx imagetools create --prefer-index=false \
-            --tag "$image:stable" --tag "$image:$release" "$image@$digest"
-          stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}')
-          [ "$stable" = "$digest" ] || fail "stable is $stable after the copy, not the tested $digest"
+          dated="$(date -u -d "$main_date" +%Y.%m.%d)-${main_sha:0:7}"
+          current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          current_version=$(docker buildx imagetools inspect "$image:$version" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          if [ "$current_stable" = "$digest" ] && [ "$current_version" = "$digest" ]; then
+            echo "stable and $version are already $digest"
+          else
+            # --prefer-index=false: a carbon copy of that digest, not a new index around it
+            docker buildx imagetools create --prefer-index=false \
+              --tag "$image:stable" --tag "$image:$dated" --tag "$image:$version" "$image@$digest"
+            current_stable=$(docker buildx imagetools inspect "$image:stable" --format '{{.Manifest.Digest}}')
+            [ "$current_stable" = "$digest" ] || fail "stable is $current_stable after the copy, not the tested $digest"
+          fi
           docker logout ghcr.io
-          echo "Promoted $digest as stable and $release"
+
+          if gh api "repos/$GH_REPO/releases/tags/$version" > /dev/null 2>&1; then
+            echo "release $version already exists"
+          else
+            # the notes: every PR merged since the previous release, newest first (normally just this one)
+            if [ -n "$previous" ]; then
+              commits=$(gh api "repos/$GH_REPO/compare/$previous...$main_sha" --jq '.commits[].sha')
+            else
+              commits=$main_sha
+            fi
+            pr_numbers=$(for commit_sha in $commits; do
+                gh api "repos/$GH_REPO/commits/$commit_sha/pulls" \
+                  --jq '.[] | select(.merged_at != null and .base.ref == "main") | .number'
+              done | awk '!seen[$0]++' | tac)
+            : > "$RUNNER_TEMP/notes.md"
+            for note_pr in $pr_numbers; do
+              gh api "repos/$GH_REPO/pulls/$note_pr" --jq '"## \(.title) (#\(.number))\n\n\(.body // "")\n"' >> "$RUNNER_TEMP/notes.md"
+            done
+            # creating the release also creates the git tag on main's commit
+            gh api -X POST "repos/$GH_REPO/releases" -f tag_name="$version" -f target_commitish="$main_sha" \
+              -f name="$version: $pr_title" -F body=@"$RUNNER_TEMP/notes.md" -f make_latest=true > /dev/null
+          fi
+          echo "Released $version: $digest as stable, $dated and $version"
 
       - name: Tell the owner
         if: failure() || cancelled()
         env:
           TEST_BOT_TOKEN: ${{ secrets.TEST_BOT_TOKEN }}
           TEST_CHAT_ID: ${{ secrets.TEST_CHAT_ID }}
-          text: "Yattoko: promote failed, stable did not move. ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          text: "Yattoko: promote failed, see the run for what moved. ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           if [ -z "$TEST_BOT_TOKEN" ] || [ -z "$TEST_CHAT_ID" ]; then
             echo "::error::no test bot secrets: nobody is told about this failure"

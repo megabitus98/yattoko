@@ -276,3 +276,15 @@ def test_unit_reads_releases():
     unit = load(CI)["jobs"]["unit"]
     assert unit["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
     assert unit["steps"][1]["name"] == "Release version"  # right after checkout: a bad title fails first
+
+
+def test_only_promote_and_merge_write_contents():
+    writers = {(name, job_id) for name, job_id, job in jobs() if job["permissions"].get("contents") == "write"}
+    assert writers == {("ci.yml", "merge"), ("promote.yml", "promote")}
+
+
+def test_promote_creates_releases():
+    promote = load(PROMOTE)["jobs"]["promote"]
+    assert promote["permissions"]["contents"] == "write"
+    text = PROMOTE.read_text(encoding="utf-8")
+    assert "repos/$GH_REPO/releases" in text and "org.opencontainers.image.version" in text
