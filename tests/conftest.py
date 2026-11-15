@@ -9,7 +9,7 @@ import shutil
 import socket
 import tempfile
 
-_test_root = tempfile.mkdtemp(prefix="ytdlbot-tests-")
+_test_root = tempfile.mkdtemp(prefix="yattoko-tests-")
 atexit.register(shutil.rmtree, _test_root, ignore_errors=True)
 
 os.environ.update(

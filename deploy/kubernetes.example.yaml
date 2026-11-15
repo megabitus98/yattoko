@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: ytdlbot-data
+  name: yattoko-data
 spec:
   # SQLite (WAL) and the Telegram session: block storage, never NFS or SMB
   # storageClassName: <a block-storage class>
@@ -16,9 +16,9 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ytdlbot
+  name: yattoko
   labels:
-    app: ytdlbot
+    app: yattoko
   annotations:
     # Keel polls `stable` and pulls the new digest when promote moves the tag
     keel.sh/policy: "force"
@@ -30,11 +30,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: ytdlbot
+      app: yattoko
   template:
     metadata:
       labels:
-        app: ytdlbot
+        app: yattoko
     spec:
       automountServiceAccountToken: false
       imagePullSecrets:
@@ -47,13 +47,13 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: ytdlbot
-          image: ghcr.io/megabitus98/ytdlbot:stable
+        - name: yattoko
+          image: ghcr.io/megabitus98/yattoko:stable
           imagePullPolicy: Always # a moved tag must really pull the new digest
           # BOT_TOKEN, APP_ID, APP_HASH, OWNER, AUTHORIZED_USER, PROXY_EXITS, PROXY_PIN, OWN_PUBLIC_IPS
           envFrom:
             - secretRef:
-                name: ytdlbot-env
+                name: yattoko-env
           env:
             - name: DB_DSN
               value: "sqlite:////data/ytdlbot.db"
@@ -108,7 +108,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: ytdlbot-data
+            claimName: yattoko-data
         # scratch: MAX_PARALLEL_JOBS x ~4.5 GB; the default TMP_BUDGET (MAX_PARALLEL_JOBS x 4500 MiB) fits in it
         - name: tmp
           emptyDir:
@@ -116,7 +116,7 @@ spec:
         # one Netscape cookies file per site (instagram.txt, youtube.txt, ...); the bot never writes it
         - name: cookies
           secret:
-            secretName: ytdlbot-cookies
+            secretName: yattoko-cookies
             optional: true
             defaultMode: 0440
 ---
@@ -124,11 +124,11 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: ytdlbot
+  name: yattoko
 spec:
   podSelector:
     matchLabels:
-      app: ytdlbot
+      app: yattoko
   policyTypes: ["Ingress", "Egress"]
   egress:
     - to:

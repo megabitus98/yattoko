@@ -1,4 +1,4 @@
-# ytdlbot
+# Yattoko
 
 Fork of [Katze-942/ytdlbot](https://github.com/Katze-942/ytdlbot), itself a fork of [tgbot-collection/ytdlbot](https://github.com/tgbot-collection/ytdlbot) by [BennyThink](https://github.com/BennyThink). Original code by BennyThink, SanujaNS and contributors; intermediate fork by Katze-942 and contributors. Apache-2.0. Not affiliated with or endorsed by the upstream authors.
 
@@ -75,19 +75,19 @@ Cookies are per site: `COOKIES_DIR/instagram.txt`, `youtube.txt`, `tiktok.txt`, 
 ## Run locally with Docker Compose
 
 1. `cp .env.example .env` and fill in `APP_ID`, `APP_HASH`, `BOT_TOKEN`, `OWNER` and `AUTHORIZED_USER`.
-2. `docker compose build` builds the `runtime` image as `ytdlbot:local`.
-3. `docker compose run --rm ytdlbot python main.py --self-check` checks the image without contacting Telegram: it prints the yt-dlp, curl-cffi and kurigram versions and whether impersonation works and `/data` and `/tmp` are writable, and exits non-zero if something is wrong.
+2. `docker compose build` builds the `runtime` image as `yattoko:local`.
+3. `docker compose run --rm yattoko python main.py --self-check` checks the image without contacting Telegram: it prints the yt-dlp, curl-cffi and kurigram versions and whether impersonation works and `/data` and `/tmp` are writable, and exits non-zero if something is wrong.
 4. `docker compose up -d` starts the bot; `docker compose logs -f` follows the log.
 
 While the bot runs, a heartbeat asks Telegram for the bot's own account every 60 s and touches `/tmp/healthy` when it answers. `python health.py` (in `/app`) exits 0 while that file is younger than 180 s and 1 otherwise; use it as the liveness and startup probe.
 
-The container runs as a non-root user with a read-only root filesystem. The database and the session file live in the `ytdlbot-data` volume (`/data`); downloads go to the `ytdlbot-tmp` volume (`/tmp`). One SQLite file, no Redis or other database service.
+The container runs as a non-root user with a read-only root filesystem. The database and the session file live in the `yattoko-data` volume (`/data`); downloads go to the `yattoko-tmp` volume (`/tmp`). One SQLite file, no Redis or other database service.
 
 ## Development
 
 - `uv sync` installs Python 3.12 dependencies from `uv.lock`.
 - `uv run pytest -q` runs the unit tests (no network, no Telegram). `tests/repo` holds checks that need a full git checkout; the image's `test` target leaves them out.
-- `docker build --target test -t ytdlbot:test . && docker run --rm ytdlbot:test` runs the unit tests inside the image.
+- `docker build --target test -t yattoko:test . && docker run --rm yattoko:test` runs the unit tests inside the image.
 - To run the bot without Docker, set `DATA_DIR` and `TMPFILE_PATH` to local directories in `.env`, then `cd src && uv run python main.py`. YouTube needs [deno](https://deno.com) on the PATH.
 
 ## Changes from upstream

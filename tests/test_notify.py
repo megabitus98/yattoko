@@ -101,7 +101,7 @@ def test_message_redacted():
     assert "u:p@" not in text
     head, details_line = text.rsplit("\n", 1)
     assert head == (
-        "[ytdlbot] blocked on instagram\ncookies: yes\nexits tried: direct, http://***@proxy.example:8080"
+        "[Yattoko] blocked on instagram\ncookies: yes\nexits tried: direct, http://***@proxy.example:8080"
     )
     assert details_line.startswith("proxy http://***@proxy.example:8080 refused x")
     assert len(details_line) == 300
@@ -115,7 +115,7 @@ def test_message_without_cookies_or_exits():
     assert client.sent == [
         (
             1,
-            "[ytdlbot] impersonation_missing on yt-dlp\ncookies: no\nexits tried: none\nno target",
+            "[Yattoko] impersonation_missing on yt-dlp\ncookies: no\nexits tried: none\nno target",
         )
     ]
 

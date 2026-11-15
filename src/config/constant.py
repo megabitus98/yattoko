@@ -97,7 +97,7 @@ class BotText:
     flood_file_name = "Please wait.txt"
 
     # to the owners (utils/notify.py); {details} is a redacted error excerpt
-    owner_notice = "[ytdlbot] {kind} on {site}\ncookies: {cookies}\nexits tried: {exits}\n{details}"
+    owner_notice = "[Yattoko] {kind} on {site}\ncookies: {cookies}\nexits tried: {exits}\n{details}"
 
     owner_cookies_expired = "yt-dlp dropped sessionid: the cookies in {site}.txt no longer work. Export fresh ones."
 
@@ -145,7 +145,7 @@ I work with YouTube, Shorts, TikTok, Instagram and the other [sites yt-dlp suppo
     """
 
     about = """
-ytdlbot, a fork of github.com/Katze-942/ytdlbot, itself a fork of github.com/tgbot-collection/ytdlbot by BennyThink.
+Yattoko, a fork of github.com/Katze-942/ytdlbot, itself a fork of github.com/tgbot-collection/ytdlbot by BennyThink.
 
 Original code by BennyThink, SanujaNS and contributors; intermediate fork by Katze-942 and contributors.
 

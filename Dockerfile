@@ -9,10 +9,10 @@ FROM python:3.12-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e73
 ARG YT_DLP_VERSION=unknown
 ARG CURL_CFFI_VERSION=unknown
 ARG KURIGRAM_VERSION=unknown
-LABEL org.opencontainers.image.source="https://github.com/megabitus98/ytdlbot" \
-      io.ytdlbot.yt-dlp="${YT_DLP_VERSION}" \
-      io.ytdlbot.curl-cffi="${CURL_CFFI_VERSION}" \
-      io.ytdlbot.kurigram="${KURIGRAM_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/megabitus98/yattoko" \
+      io.yattoko.yt-dlp="${YT_DLP_VERSION}" \
+      io.yattoko.curl-cffi="${CURL_CFFI_VERSION}" \
+      io.yattoko.kurigram="${KURIGRAM_VERSION}"
 
 RUN apk add --no-cache ffmpeg deno aria2 \
     && addgroup -g 10001 app \
