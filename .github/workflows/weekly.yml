@@ -29,7 +29,7 @@ env:
 
 jobs:
   regression:
-    runs-on: [self-hosted, ytdlbot-regression]
+    runs-on: [self-hosted, yattoko-regression]
     timeout-minutes: 45
     permissions:
       packages: read # pull stable while the package is private
@@ -134,7 +134,7 @@ jobs:
           for check in yt-dlp:3 curl-cffi:5; do
             package=${check%%:*}
             max_days=${check##*:}
-            running=$(jq -r --arg key "io.ytdlbot.$package" '.[$key] // "unknown"' <<< "$labels")
+            running=$(jq -r --arg key "io.yattoko.$package" '.[$key] // "unknown"' <<< "$labels")
             if ! pypi=$(curl -fsSL "https://pypi.org/pypi/$package/json"); then
               problems+=("could not read PyPI for $package")
               continue
@@ -196,6 +196,6 @@ jobs:
             echo "::error::no test bot secrets: only GitHub's own notice (to whoever last changed the schedule) reports this week's problems"
             exit 1
           fi
-          text="ytdlbot weekly: regression $regression_result, checks $checks_result. $run_url"
+          text="Yattoko weekly: regression $regression_result, checks $checks_result. $run_url"
           printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\n' "$TEST_BOT_TOKEN" "$TEST_CHAT_ID" |
             curl -fsS -K - --data-urlencode "text=$text" -o /dev/null

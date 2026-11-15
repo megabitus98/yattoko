@@ -1,18 +1,18 @@
 # Local run: one container, SQLite on the data volume, no Redis or other database.
 # Modified 2026 by megabitus98 (fork): one service built from this repository, volumes for /data and /tmp, read-only root
 services:
-  ytdlbot:
+  yattoko:
     build:
       context: .
       target: runtime
-    image: ytdlbot:local
+    image: yattoko:local
     env_file: .env
     restart: unless-stopped
     read_only: true
     volumes:
-      - ytdlbot-data:/data
-      - ytdlbot-tmp:/tmp
+      - yattoko-data:/data
+      - yattoko-tmp:/tmp
 
 volumes:
-  ytdlbot-data:
-  ytdlbot-tmp:
+  yattoko-data:
+  yattoko-tmp:

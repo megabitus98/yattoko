@@ -41,7 +41,7 @@ def test_no_statuses_write():
 
 
 OWN_BRANCHES = "github.event.pull_request.head.repo.full_name == github.repository"
-HOME_RUNNER = ["self-hosted", "ytdlbot-regression"]
+HOME_RUNNER = ["self-hosted", "yattoko-regression"]
 
 
 def jobs():

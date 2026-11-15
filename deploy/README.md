@@ -8,18 +8,18 @@
 - uid and gid 10001 (the image's `app` user), `fsGroup: 10001` so that user can write the volume, a read-only root filesystem, no capabilities, no service account token.
 - `/data`: a 1Gi claim on block storage. SQLite in WAL mode does not work on NFS or SMB.
 - `/tmp`: an `emptyDir` with `sizeLimit: 10Gi` for downloads and the yt-dlp and deno caches. Plan about 4.5 GB per parallel job; the default `TMP_BUDGET` (`MAX_PARALLEL_JOBS` × 4500 MiB) fits in it. If you change `MAX_PARALLEL_JOBS`, change `sizeLimit`, the `ephemeral-storage` limit and `TMP_BUDGET` with it.
-- `/cookies`: the optional `ytdlbot-cookies` Secret, read-only. The bot reads each file into memory and never writes it.
+- `/cookies`: the optional `yattoko-cookies` Secret, read-only. The bot reads each file into memory and never writes it.
 - Startup and liveness probes run `python /app/health.py`, which fails when the heartbeat file is older than 180 s.
 - Resources: request equals limit. The numbers in the example are placeholders; measure the peak of a large video (download plus ffmpeg merge) and size from that.
 - Keel annotations (`keel.sh/policy: force`, `keel.sh/match-tag: "true"`, `keel.sh/trigger: poll`) and `imagePullPolicy: Always`: when `stable` moves, Keel restarts the pod and the new digest is pulled.
 
 ## Secrets
 
-The bot's settings come from the `ytdlbot-env` Secret (`BOT_TOKEN`, `APP_ID`, `APP_HASH`, `OWNER`, `AUTHORIZED_USER`, `PROXY_EXITS`, `PROXY_PIN`, `OWN_PUBLIC_IPS`; see `.env.example` for all of them). Set `PROXY_PIN=instagram=direct`, with `direct` also listed in `PROXY_EXITS` (for example `PROXY_EXITS=direct,http://proxy.example:8080`; the bot refuses to start when a pin names an exit that is not listed): Instagram then never falls back to a proxy, so its login always comes from the same home address (the default pins nothing). Set `ENABLE_FFMPEG=true` for the H.264 conversion of short VP9/AV1 videos.
+The bot's settings come from the `yattoko-env` Secret (`BOT_TOKEN`, `APP_ID`, `APP_HASH`, `OWNER`, `AUTHORIZED_USER`, `PROXY_EXITS`, `PROXY_PIN`, `OWN_PUBLIC_IPS`; see `.env.example` for all of them). Set `PROXY_PIN=instagram=direct`, with `direct` also listed in `PROXY_EXITS` (for example `PROXY_EXITS=direct,http://proxy.example:8080`; the bot refuses to start when a pin names an exit that is not listed): Instagram then never falls back to a proxy, so its login always comes from the same home address (the default pins nothing). Set `ENABLE_FFMPEG=true` for the H.264 conversion of short VP9/AV1 videos.
 
 ```sh
-kubectl create secret generic ytdlbot-env --from-env-file=ytdlbot.env
-kubectl create secret generic ytdlbot-cookies --from-file=instagram.txt --from-file=youtube.txt
+kubectl create secret generic yattoko-env --from-env-file=yattoko.env
+kubectl create secret generic yattoko-cookies --from-file=instagram.txt --from-file=youtube.txt
 kubectl create secret docker-registry ghcr-pull --docker-server=ghcr.io \
   --docker-username=<github user> --docker-password=<classic token with read:packages only>
 ```
@@ -56,10 +56,10 @@ The test secrets reach the code under test inside the regression container, so t
 
 ### Home runner
 
-The regression has to download from a home connection: video sites often block the datacenter addresses of GitHub's runners. It runs on a self-hosted runner with the label `ytdlbot-regression`:
+The regression has to download from a home connection: video sites often block the datacenter addresses of GitHub's runners. It runs on a self-hosted runner with the label `yattoko-regression`:
 
 - A small VM or container host with Docker and nothing else on it: the regression runs new dependency versions, and a container escape would land on that host.
-- Register it for this repository only (Settings → Actions → Runners → New self-hosted runner), add the label `ytdlbot-regression` (`./config.sh ... --labels ytdlbot-regression`), and run it as a service. Prefer `--ephemeral` with a wrapper that registers a fresh runner after each job, so no job can leave something behind for the next one.
+- Register it for this repository only (Settings → Actions → Runners → New self-hosted runner), add the label `yattoko-regression` (`./config.sh ... --labels yattoko-regression`), and run it as a service. Prefer `--ephemeral` with a wrapper that registers a fresh runner after each job, so no job can leave something behind for the next one.
 - Internet only: block the host from your LAN on the router or with a separate VLAN, and keep its containers off private addresses: `iptables` rules in the `DOCKER-USER` chain that drop the three RFC 1918 ranges, after a rule that accepts your DNS server if it sits on a private address. `DOCKER-USER` only sees traffic the host forwards; traffic from a container to the host itself (SSH, the Docker API on TCP) goes through `INPUT`, so also drop the Docker bridge networks there for everything but DNS.
 - It needs no secrets of its own: each job brings a read-only registry token and the test bot secrets, and removes its registry login when it ends.
 
