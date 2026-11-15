@@ -11,7 +11,7 @@ from database.model import get_quality_settings
 from fakes import FakeClient, fake_callback, fake_message
 from utils import access
 
-GUARD_CALLBACKS = (access.guard_message, access.guard_callback)
+GUARD_CALLBACKS = (access.guard_message, access.guard_callback, access.guard_pre_checkout)
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +77,18 @@ def test_stranger_callback_alert():
     assert answers == []
 
 
+def test_stranger_pre_checkout_refused():
+    # fake_callback has the same from_user/answer shape as a PreCheckoutQuery
+    query, answers = fake_callback("", user_id=99)
+    with pytest.raises(StopPropagation):
+        access.guard_pre_checkout(FakeClient(), query)
+    assert answers == [(None, {"ok": False, "error_message": BotText.denied.format(user_id=99)})]
+
+    query, answers = fake_callback("", user_id=2)
+    assert access.guard_pre_checkout(FakeClient(), query) is None
+    assert answers == []
+
+
 def test_group_message_ignored_when_groups_off(monkeypatch):
     monkeypatch.setattr(access, "ENABLE_GROUPS", False)
     for chat_type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
@@ -99,7 +111,10 @@ def test_guard_fails_closed_when_reply_fails():
         access.guard_message(FakeClient(), message)
 
 
-def test_every_handler_type_has_guard():
+@pytest.mark.parametrize("vip", [False, True])
+def test_every_handler_type_has_guard(monkeypatch, vip):
+    # with ENABLE_VIP the payment handlers bring a new type, PreCheckoutQueryHandler
+    monkeypatch.setattr(main, "ENABLE_VIP", vip)
     table = main.handler_table()
     guarded = {
         cls

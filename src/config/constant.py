@@ -4,7 +4,7 @@
 # ytdlbot - constant.py
 # 8/16/21 16:59
 #
-# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large, owner notice texts
+# Modified 2026 by megabitus98 (fork): BotText.disabled for switched-off features, BotText.denied and BotText.no_link, generic BotText.error, English texts for every user-facing string, /about credits both upstream repositories, per-kind download error texts, quality button labels, flood-wait file name, BotText.refused, BotText.queued and BotText.too_large, owner notice texts, upstream's quota and payment texts (ENABLE_VIP)
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -37,6 +37,23 @@ class BotText:
     too_large = "This video is too large for Telegram (over 2 GB)."
 
     queued = "Queued, position {n}."
+
+    # quota and payments, only with ENABLE_VIP (upstream's texts)
+    quota = "\n\nYou have {free} free and {paid} paid quota."
+
+    quota_exhausted = "Quota exhausted. Please /buy or wait until free quota is reset."
+
+    buy = "Please choose the amount you want to buy."
+
+    invoice_title = "{} permanent download quota"
+
+    invoice_description = "Please make a payment via Stripe"
+
+    invoice_label = "VIP"
+
+    payment_done = "Payment successful! You now have {free} free and {paid} paid quota."
+
+    payment_failed = "Something went wrong. Please contact the admin."
 
     bad_link = "Check the link and send it again."
 
@@ -185,6 +202,13 @@ SponsorBlock: <b>{}</b>
         "720p": "720p",
         "480p": "480p",
         "240p": "240p",
+        # /buy: quota for US dollars
+        "buy-10-1": "10-$1",
+        "buy-20-2": "20-$2",
+        "buy-40-3.5": "40-$3.5",
+        "buy-50-4": "50-$4",
+        "buy-75-6": "75-$6",
+        "buy-100-8": "100-$8",
     }
 
     # setting key -> answer shown after a settings button is pressed

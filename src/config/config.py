@@ -4,7 +4,7 @@
 # ytdlbot - config.py
 # 8/28/21 15:01
 #
-# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages
+# Modified 2026 by megabitus98 (fork): strict parsing (ID lists, booleans, integers), feature switches, DATA_DIR, check_paths, COOKIES_DIR, MAX_PARALLEL_JOBS, TMP_BUDGET, JOB_TIMEOUT, OWN_PUBLIC_IPS, PROXY_EXITS and PROXY_PIN instead of YT_DLP_PROXY, no values in ConfigError messages, upstream's VIP, rclone and ffmpeg settings restored (RCLONE_PATH read from RCLONE_PATH)
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -153,6 +153,17 @@ ENABLE_SPDL = _bool_env("ENABLE_SPDL")
 ENABLE_STATS = _bool_env("ENABLE_STATS")
 ENABLE_GROUPS = _bool_env("ENABLE_GROUPS")
 M3U8_SUPPORT = _bool_env("M3U8_SUPPORT")
+
+# restored from upstream, off by default. Upstream master reads RCLONE_PATH and ENABLE_FFMPEG but nothing
+# uses them (their code went in its 2025 refactor), so here too they are only read.
+ENABLE_FFMPEG = _bool_env("ENABLE_FFMPEG")
+RCLONE_PATH = _raw("RCLONE_PATH")
+
+# payment settings: free quota reset daily, paid quota bought with /buy (Telegram payments)
+ENABLE_VIP = _bool_env("ENABLE_VIP")
+PROVIDER_TOKEN = _raw("PROVIDER_TOKEN")
+FREE_DOWNLOAD: int = _int_env("FREE_DOWNLOAD", 3)
+TOKEN_PRICE: int = _int_env("TOKEN_PRICE", 10)  # 1 USD=10 downloads; as upstream, the /buy price list does not read it
 
 # Telegram upload limit, set in MiB
 TG_NORMAL_MAX_SIZE: int = _int_env("TG_NORMAL_MAX_SIZE", 2000) * 1024 * 1024

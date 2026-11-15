@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first), OwnerNotice table and claim_notice (one owner notice per site and kind a day)
+# Modified 2026 by megabitus98 (fork): engine from config.DB_DSN, SQLite WAL with busy timeout, insert-or-ignore init_user, default codec vcodec-auto (H.264 first), OwnerNotice table and claim_notice (one owner notice per site and kind a day), upstream's Payment table, quota columns and quota functions restored (used only with ENABLE_VIP), create_schema() adds the quota columns to an existing users table
 
+import logging
+import math
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Literal
@@ -9,8 +11,10 @@ from typing import Literal
 from sqlalchemy import (
     BigInteger,
     Column,
+    JSON,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -23,7 +27,20 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 
-from config import DB_DSN
+from config import DB_DSN, ENABLE_VIP, FREE_DOWNLOAD
+from database.migrate import ensure_columns
+
+
+class PaymentStatus:
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
+
+class QuotaExhausted(Exception):
+    pass
+
 
 Base = declarative_base()
 
@@ -33,8 +50,12 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, unique=True, nullable=False)  # telegram user id
+    free = Column(Integer, default=FREE_DOWNLOAD)
+    paid = Column(Integer, default=0)
+    config = Column(JSON)
 
     settings = relationship("Setting", back_populates="user", cascade="all, delete-orphan", uselist=False)
+    payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
 
 
 class Setting(Base):
@@ -53,6 +74,27 @@ class Setting(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     user = relationship("User", back_populates="settings")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    method = Column(String(50), nullable=False)
+    amount = Column(Float, nullable=False)
+    status = Column(
+        Enum(
+            PaymentStatus.PENDING,
+            PaymentStatus.COMPLETED,
+            PaymentStatus.FAILED,
+            PaymentStatus.REFUNDED,
+        ),
+        nullable=False,
+    )
+    transaction_id = Column(String(100))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    user = relationship("User", back_populates="payments")
 
 
 class OwnerNotice(Base):
@@ -80,9 +122,25 @@ def make_engine(dsn: str) -> Engine:
     return engine
 
 
+# Columns added to tables a released version already created. create_all adds missing tables only.
+# Every User query selects these columns, so they are added whether or not ENABLE_VIP is on.
+ADDED_COLUMNS = {
+    "users": {
+        "free": f"INTEGER DEFAULT {FREE_DOWNLOAD}",
+        "paid": "INTEGER DEFAULT 0",
+        "config": "JSON",
+    },
+}
+
+
+def create_schema(engine: Engine) -> None:
+    Base.metadata.create_all(engine)
+    for table, columns in ADDED_COLUMNS.items():
+        ensure_columns(engine, table, columns)
+
+
 engine = make_engine(DB_DSN)
-# create_all adds missing tables only; columns added later go through database.migrate.ensure_columns
-Base.metadata.create_all(engine)
+create_schema(engine)
 SessionFactory = sessionmaker(bind=engine)
 
 
@@ -170,3 +228,83 @@ def claim_notice(site: str, kind: str, now: datetime) -> bool:
     )
     with session_manager() as session:
         return session.execute(statement).rowcount == 1
+
+
+# Quota, restored from upstream. The callers (engine/base.py, main.py) call these only with ENABLE_VIP on.
+
+
+def get_free_quota(uid: int):
+    if not ENABLE_VIP:
+        return math.inf
+
+    with session_manager() as session:
+        data = session.query(User).filter(User.user_id == uid).first()
+        if data:
+            return data.free
+        return FREE_DOWNLOAD
+
+
+def get_paid_quota(uid: int):
+    if ENABLE_VIP:
+        with session_manager() as session:
+            data = session.query(User).filter(User.user_id == uid).first()
+            if data:
+                return data.paid
+
+            return 0
+
+    return math.inf
+
+
+def check_quota(uid: int):
+    if not ENABLE_VIP:
+        return
+
+    with session_manager() as session:
+        data = session.query(User).filter(User.user_id == uid).first()
+        if data and (data.free + data.paid) <= 0:
+            raise QuotaExhausted()
+
+
+def use_quota(uid: int):
+    # use free first, then paid
+    if not ENABLE_VIP:
+        return
+
+    with session_manager() as session:
+        user = session.query(User).filter(User.user_id == uid).first()
+        if user:
+            if user.free > 0:
+                user.free -= 1
+            elif user.paid > 0:
+                user.paid -= 1
+            else:
+                raise QuotaExhausted()
+
+
+def reset_free():
+    # the daily job main.create_app() schedules with ENABLE_VIP
+    with session_manager() as session:
+        session.query(User).update({User.free: FREE_DOWNLOAD})
+
+
+def credit_account(who, total_amount: int, quota: int, transaction, method="stripe"):
+    with session_manager() as session:
+        user = session.query(User).filter(User.user_id == who).first()
+        if user:
+            dollar = total_amount / 100
+            user.paid += quota
+            logging.info("user %d credited with %d tokens, payment:$%.2f", who, user.paid, dollar)
+            session.add(
+                Payment(
+                    method=method,
+                    amount=total_amount,
+                    status=PaymentStatus.COMPLETED,
+                    transaction_id=transaction,
+                    user_id=user.id,
+                )
+            )
+            session.commit()
+            return user.free, user.paid
+
+        return None, None

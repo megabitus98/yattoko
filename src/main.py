@@ -4,7 +4,7 @@
 # ytdlbot - new.py
 # 8/14/21 14:37
 #
-# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app(), owner notices (impersonation check at startup, login_required/blocked from the handlers), FloodWait retried by a timer instead of a sleeping worker, each owner messaged separately
+# Modified 2026 by megabitus98 (fork): handler_table()/create_app() instead of a module-level client, --self-check, no quote= (kurigram 2.2.27), env feature switches, access guard at group -1, first URL in the message, anchored settings callbacks saved by user ID, session in DATA_DIR, refuse TMPFILE_PATH overlapping DATA_DIR, BotText.error instead of exception text in replies, English texts from config.constant, download failures replied per kind (engine.errors), /about without link preview, every settings button labelled from BotText.buttons, no URL-based playlist check (engine.generic.attempt refuses playlists after extraction), downloads handed to a JobQueue of MAX_PARALLEL_JOBS with queue positions, heartbeat for the probes, /stats uptime from create_app(), owner notices (impersonation check at startup, login_required/blocked from the handlers), FloodWait retried by a timer instead of a sleeping worker, each owner messaged separately, upstream's /buy, Telegram payment handlers and daily free-quota reset restored behind ENABLE_VIP (anchored buy callbacks priced from BUY_CHOICES)
 
 __author__ = "Benny <benny.think@gmail.com>"
 
@@ -34,9 +34,10 @@ if __name__ == "__main__" and "--self-check" in sys.argv[1:]:
 import psutil
 import pyrogram.errors
 import yt_dlp
+from apscheduler.schedulers.background import BackgroundScheduler
 from pyrogram import Client, enums, filters, idle, types
 from pyrogram.filters import Filter
-from pyrogram.handlers import CallbackQueryHandler, MessageHandler
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler, PreCheckoutQueryHandler
 from pyrogram.utils import loops
 
 from config import (
@@ -49,20 +50,26 @@ from config import (
     ENABLE_SEARCH,
     ENABLE_SPDL,
     ENABLE_STATS,
+    ENABLE_VIP,
     M3U8_SUPPORT,
     MAX_PARALLEL_JOBS,
     OWNERS,
+    PROVIDER_TOKEN,
     TMPFILE_PATH,
     WORKERS,
     BotText,
     check_paths,
 )
 from database.model import (
+    credit_account,
     get_format_settings,
+    get_free_quota,
+    get_paid_quota,
     get_quality_settings,
     get_sponsorblock_settings,
     get_vcodec_settings,
     init_user,
+    reset_free,
     set_user_settings,
 )
 from engine import direct_entrance, youtube_entrance, special_download_entrance
@@ -79,6 +86,8 @@ from utils.notify import notify_owners, send_to_owners
 JOBS = JobQueue(MAX_PARALLEL_JOBS)
 # for the /stats uptime; create_app() sets it again
 started_at = time.time()
+# the daily free-quota reset; create_app() starts it only with ENABLE_VIP
+scheduler: BackgroundScheduler | None = None
 
 def search_ytb(kw: str, num_results: int = 10) -> str:
     # Single flat search query — no per-result extract_info (avoids N+1 latency)
@@ -108,9 +117,12 @@ def start_handler(client: Client, message: types.Message):
     init_user(from_id)
     logging.info("%s welcome to youtube-dl bot!", message.from_user.id)
     client.send_chat_action(from_id, enums.ChatAction.TYPING)
+    text = BotText.start
+    if ENABLE_VIP:
+        text += BotText.quota.format(free=get_free_quota(from_id), paid=get_paid_quota(from_id))
     client.send_message(
         from_id,
-        BotText.start,
+        text,
         disable_web_page_preview=True,
     )
 
@@ -186,6 +198,58 @@ def stats_handler(client: Client, message: types.Message):
     )
 
     message.reply_text(stats)
+
+
+# Callback data -> (download quota, price in US cents). The callback regex is built from these keys,
+# so count and price come from here, never from data a client sent.
+BUY_CHOICES = {
+    "buy-10-1": (10, 100),
+    "buy-20-2": (20, 200),
+    "buy-40-3.5": (40, 350),
+    "buy-50-4": (50, 400),
+    "buy-75-6": (75, 600),
+    "buy-100-8": (100, 800),
+}
+
+
+def buy(client: Client, message: types.Message):
+    rows = [list(BUY_CHOICES)[:3], list(BUY_CHOICES)[3:]]
+    markup = types.InlineKeyboardMarkup(
+        [[types.InlineKeyboardButton(BotText.buttons[data], callback_data=data) for data in row] for row in rows]
+    )
+    message.reply_text(BotText.buy, reply_markup=markup)
+
+
+def send_invoice(client: Client, callback_query: types.CallbackQuery):
+    count, price = BUY_CHOICES[callback_query.data]
+    client.send_invoice(
+        callback_query.message.chat.id,
+        BotText.invoice_title.format(count),
+        BotText.invoice_description,
+        str(count),
+        "USD",
+        [types.LabeledPrice(label=BotText.invoice_label, amount=price)],
+        provider_token=PROVIDER_TOKEN,
+        protect_content=True,
+        start_parameter="no-forward-placeholder",
+    )
+
+
+def pre_checkout(client: Client, query: types.PreCheckoutQuery):
+    client.answer_pre_checkout_query(query.id, ok=True)
+
+
+def successful_payment(client: Client, message: types.Message):
+    who = message.from_user.id
+    payment = message.successful_payment
+    init_user(who)  # credit_account finds no row for a user who never sent a command
+    free, paid = credit_account(who, payment.total_amount, int(payment.invoice_payload), payment.provider_payment_charge_id)
+    if paid is None:
+        logging.error("Payment %s from %s was not credited", payment.provider_payment_charge_id, who)
+        message.reply_text(BotText.payment_failed)
+    else:
+        message.reply_text(BotText.payment_done.format(free=free, paid=paid))
+    message.delete()
 
 
 def settings_handler(client: Client, message: types.Message):
@@ -419,6 +483,14 @@ def sponsorblock_callback(client: Client, callback_query: types.CallbackQuery):
 
 HandlerSpec = tuple[type, Callable, Filter | None, int]
 
+# Only with ENABLE_VIP; before the catch-all text handler, which would take /buy otherwise
+VIP_HANDLERS: list[HandlerSpec] = [
+    (MessageHandler, buy, filters.command(["buy"]), 0),
+    (MessageHandler, successful_payment, filters.successful_payment, 0),
+    (CallbackQueryHandler, send_invoice, choice_filter(BUY_CHOICES), 0),
+    (PreCheckoutQueryHandler, pre_checkout, None, 0),
+]
+
 
 def handler_table() -> list[HandlerSpec]:
     # Order matters: within a group the first matching handler wins, so the catch-all text handler
@@ -434,6 +506,7 @@ def handler_table() -> list[HandlerSpec]:
         (MessageHandler, direct_download, filters.command(["direct"]), 0),
         (MessageHandler, spdl_handler, filters.command(["spdl"]), 0),
         (MessageHandler, ytdl_handler, filters.command(["ytdl"]) & filters.group, 0),
+        *(VIP_HANDLERS if ENABLE_VIP else []),
         (MessageHandler, download_handler, filters.private & filters.incoming & filters.text, 0),
         (CallbackQueryHandler, format_callback, choice_filter(FORMAT_CHOICES), 0),
         (CallbackQueryHandler, quality_callback, choice_filter(QUALITY_CHOICES), 0),
@@ -443,12 +516,16 @@ def handler_table() -> list[HandlerSpec]:
 
 
 def create_app() -> Client:
-    global started_at
+    global started_at, scheduler
     started_at = time.time()
     # the session file lives on the data volume next to the database, not in the image
     app = Client("main", APP_ID, APP_HASH, bot_token=BOT_TOKEN, workers=WORKERS, workdir=DATA_DIR)
     for handler_cls, callback, handler_filters, group in handler_table():
         app.add_handler(handler_cls(callback, handler_filters), group)
+    if ENABLE_VIP:
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(reset_free, "cron", hour=0, minute=0)
+        scheduler.start()
     return app
 
 

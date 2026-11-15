@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - types.py
-# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock, owner notice after a login_required or blocked reply
+# Modified 2026 by megabitus98 (fork): upload fallback loop for kurigram 2.2.27 (save_file raises), English texts from config.constant, download failures logged, classified and shown once in the progress message, settings read by the requesting user's ID, BotText.refused for playlists and live streams, host check first, size, scratch budget and time limits in download_hook, one retry a quality lower for an oversized file, shared file_id cache keyed with SponsorBlock, owner notice after a login_required or blocked reply, upstream's quota check and use restored behind ENABLE_VIP
 
 import hashlib
 import json
@@ -27,6 +27,7 @@ from pyrogram import enums, errors, types
 from tqdm import tqdm
 
 from config import (
+    ENABLE_VIP,
     JOB_TIMEOUT,
     OWN_PUBLIC_IPS,
     TG_NORMAL_MAX_SIZE,
@@ -37,10 +38,13 @@ from config import (
 )
 from database import get_cache
 from database.model import (
+    QuotaExhausted,
+    check_quota,
     get_format_settings,
     get_quality_settings,
     get_sponsorblock_settings,
     get_vcodec_settings,
+    use_quota,
 )
 from engine.errors import OWNER_TOLD, RefusedContent, classify, site_name, tell_owners, user_message
 from engine.jobs import JobTimeout, TooLarge
@@ -350,6 +354,8 @@ class BaseDownloader(ABC):
     @final
     def start(self):
         try:
+            if ENABLE_VIP:
+                check_quota(self._from_user)
             if cache := self._get_video_cache():
                 logging.info("Cache hit for %s", self._url)
                 meta, file_id = json.loads(cache["meta"]), json.loads(cache["file_id"])
@@ -357,8 +363,13 @@ class BaseDownloader(ABC):
                 self._upload(file_id, meta)
             else:
                 self._start()
+            # only after a file was sent, cache hits included, as upstream
+            if ENABLE_VIP:
+                use_quota(self._from_user)
         except errors.Flood:
             raise  # the job in main.submit_download() tells the user to wait
+        except QuotaExhausted:
+            self._bot_msg.edit_text(BotText.quota_exhausted)
         except RefusedContent:
             logging.info("Refused %s: not a single video", self._url)
             self._bot_msg.edit_text(BotText.refused)

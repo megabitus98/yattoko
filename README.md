@@ -26,6 +26,7 @@ A Telegram bot for a small allow-listed group of people. Send it a link in a pri
 | `/direct <url>` | Download a file over plain HTTP (aria2 with `ENABLE_ARIA2`), needs `ENABLE_DIRECT` |
 | `/spdl <url>` | pixeldrain and krakenfiles, needs `ENABLE_SPDL` |
 | `/ytdl <url>` | Download in a group, needs `ENABLE_GROUPS` |
+| `/buy` | Buy download quota through Telegram payments, needs `ENABLE_VIP` and `PROVIDER_TOKEN` |
 
 ## Configuration
 
@@ -61,6 +62,12 @@ Everything is set through environment variables (or a `.env` file, see `.env.exa
 | `ENABLE_STATS` | `false` | `/stats` for owners |
 | `ENABLE_GROUPS` | `false` | `/ytdl` in groups. Off: group messages are ignored |
 | `M3U8_SUPPORT` | `false` | m3u8 links. Off: refused |
+| `ENABLE_VIP` | `false` | Quota and payments, restored from upstream: each user gets `FREE_DOWNLOAD` downloads, reset every day at midnight (container time), and can buy more with `/buy`. A cached file counts as a download. Off: no quota is checked, `/buy` does not exist and no daily job runs |
+| `PROVIDER_TOKEN` | empty | Payment provider token from BotFather, for `/buy`. A secret: it never appears in logs |
+| `FREE_DOWNLOAD` | `3` | Free downloads per user per day, with `ENABLE_VIP` |
+| `TOKEN_PRICE` | `10` | Downloads per US dollar. Read but unused, as in upstream: the `/buy` price list is fixed |
+| `RCLONE_PATH` | unset | Restored from upstream (which reads it as `RCLONE`), where no code uses it any more. No effect |
+| `ENABLE_FFMPEG` | `false` | Restored from upstream, where no code uses it any more. No effect; ffmpeg is always used to merge streams and make thumbnails |
 
 Cookies are per site: `COOKIES_DIR/instagram.txt`, `youtube.txt`, `tiktok.txt`, and for other sites the yt-dlp extractor name in lower case (`vimeo.txt`). The site is the one yt-dlp's extractor would pick for the link. When the file for a site exists and is not empty, every download from that site uses it; otherwise the bot tries without a login. The bot only reads the files: each download gets an in-memory copy, so the directory can be a read-only mount (in Compose, add `- ./cookies:/cookies:ro` under `volumes`). Use a spare account for each site, not a personal one: every allowed user's downloads run as that account.
 
@@ -102,7 +109,7 @@ This list is written from the code at this fork's head, compared with Katze-942/
 - **Build.** uv with a lock file instead of PDM, Python 3.12, kurigram 2.2.27, yt-dlp with curl-cffi for browser impersonation. Alpine image pinned by digest, non-root user, caches and scratch under `/tmp` so the root filesystem can be read-only, `runtime` and `test` targets, and `python main.py --self-check`.
 - **Repository.** Donation and payment material, the upstream public bot links and images, the old workflows and Dependabot file, and the Redis and MySQL compose services are gone. A unit test suite lives in `tests/`.
 
-Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads. Still absent, as in Katze-942/ytdlbot: VIP quota, payments and `/buy`.
+Kept from Katze-942/ytdlbot: embedded thumbnails and metadata, quality, codec and SponsorBlock settings, IPv4-only downloads. Restored from tgbot-collection/ytdlbot and off by default: VIP quota, Telegram payments, `/buy` and the daily free-quota reset (`ENABLE_VIP`), with the quota columns added to an existing database at startup, and the `RCLONE_PATH` and `ENABLE_FFMPEG` settings (read but unused, as upstream).
 
 ## License
 

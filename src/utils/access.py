@@ -2,14 +2,14 @@
 # coding: utf-8
 
 # ytdlbot - access.py
-# Modified 2026 by megabitus98 (fork): new file, one fail-closed access guard for every update
+# Modified 2026 by megabitus98 (fork): new file, one fail-closed access guard for every update, pre-checkout queries guarded too (ENABLE_VIP payments)
 
 import logging
 import threading
 import time
 
 from pyrogram import enums
-from pyrogram.handlers import CallbackQueryHandler, MessageHandler
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler, PreCheckoutQueryHandler
 
 from config import AUTHORIZED_USERS, ENABLE_GROUPS, OWNERS, BotText
 
@@ -72,10 +72,24 @@ def guard_callback(client, callback_query) -> None:
     callback_query.stop_propagation()
 
 
+def guard_pre_checkout(client, query) -> None:
+    # payments (ENABLE_VIP): an invoice can reach someone else, so the payer is checked too
+    try:
+        user = query.from_user
+        if user is not None and _allowed(user.id):
+            return None
+        if user is not None:
+            query.answer(ok=False, error_message=BotText.denied.format(user_id=user.id))
+    except Exception:
+        logging.exception("Access guard error, pre-checkout query dropped")
+    query.stop_propagation()
+
+
 # filters=None: a guard must see every update of its type
 GUARDS = [
     (MessageHandler, guard_message, None, -1),
     (CallbackQueryHandler, guard_callback, None, -1),
+    (PreCheckoutQueryHandler, guard_pre_checkout, None, -1),
 ]
 
 

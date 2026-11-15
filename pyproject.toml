@@ -23,6 +23,7 @@ dependencies = [
     "python-dotenv",
     "ffmpeg-python",
     "tqdm",
+    "apscheduler>=3.11.3",
 ]
 
 [dependency-groups]
