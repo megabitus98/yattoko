@@ -45,6 +45,32 @@ jobs:
     steps:
       - name: Promote the tested image
         run: |
+          # >>> release rule (identical in ci.yml and promote.yml; tests/repo/test_pipeline_files.py checks it)
+          title_pattern='^(feat|fix|deps|docs|ci|test|build|chore|refactor|perf)(\([a-z0-9-]+\))?(!)?: .+'
+          # next_version <previous tag or empty> <PR title>: the release this PR becomes; fails on an unknown title
+          next_version() {
+            local previous=$1 title=$2 type breaking major minor patch
+            [[ "$title" =~ $title_pattern ]] || return 1
+            type=${BASH_REMATCH[1]}
+            breaking=${BASH_REMATCH[3]}
+            if [ -z "$previous" ]; then echo v1.0.0; return 0; fi
+            IFS=. read -r major minor patch <<< "${previous#v}"
+            if [ -n "$breaking" ]; then echo "v$((major + 1)).0.0"
+            elif [ "$type" = feat ]; then echo "v$major.$((minor + 1)).0"
+            else echo "v$major.$minor.$((patch + 1))"; fi
+          }
+          # previous_tag <commit>: the highest vX.Y.Z tag on that commit or one of its ancestors (empty: none yet).
+          # An API error fails (an empty answer would mean "no tags" and restart at v1.0.0); no tags at all is not an error.
+          previous_tag() {
+            local all_tags tag_name tag_sha status
+            all_tags=$(gh api --paginate "repos/$GH_REPO/tags" --jq '.[] | "\(.name) \(.commit.sha)"') || return 1
+            while read -r tag_name tag_sha; do
+              status=$(gh api "repos/$GH_REPO/compare/$tag_sha...$1" --jq .status) || return 1
+              case $status in ahead|identical) echo "$tag_name"; return 0 ;; esac
+            done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' <<< "$all_tags" | sort -rV)
+          }
+          # <<< release rule
+
           # green <sha>: every ci job the release depends on succeeded on that commit: for each check
           # name, the most recently started run of it (a re-run or a later ci run on the same head
           # replaces an older result); pending, skipped or missing is not green

@@ -2,8 +2,11 @@
 
 import ipaddress
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -216,3 +219,60 @@ def test_example_has_no_real_addresses():
     assert any(IPV4.findall(t) for t in texts.values()), "the example names no addresses at all"
     found = {name: _private_addresses(text, name.endswith(".yaml")) for name, text in texts.items()}
     assert {name: a for name, a in found.items() if a} == {}
+
+
+PROMOTE = ROOT / ".github" / "workflows" / "promote.yml"
+# the marker lines carry a comment after them and sit indented inside `run: |`
+RULE = re.compile(r"# >>> release rule[^\n]*\n(.*?)^[ \t]*# <<< release rule", re.S | re.M)
+
+
+def release_rule(path):
+    [block] = RULE.findall(path.read_text(encoding="utf-8"))
+    return textwrap.dedent(block)
+
+
+def run_rule(call):
+    return subprocess.run(["bash", "-c", release_rule(CI) + call], capture_output=True, text=True)
+
+
+def test_release_rule_identical():
+    assert release_rule(CI) == release_rule(PROMOTE)
+
+
+@pytest.mark.parametrize(
+    "previous, title, expected",
+    [
+        ("", "fix: a", "v1.0.0"),
+        ("", "fix!: a", "v1.0.0"),
+        ("", "feat: a", "v1.0.0"),
+        ("v1.0.3", "deps: bump yt-dlp from 1 to 2", "v1.0.4"),
+        ("v1.0.3", "fix(cache): a", "v1.0.4"),
+        ("v1.0.3", "docs: a", "v1.0.4"),
+        ("v1.0.3", "feat: a", "v1.1.0"),
+        ("v1.2.3", "feat!: a", "v2.0.0"),
+        ("v1.2.3", "fix(api)!: a", "v2.0.0"),
+        ("v1.9.9", "feat: a", "v1.10.0"),
+    ],
+)
+def test_release_rule_bumps(previous, title, expected):
+    result = run_rule(f'next_version "{previous}" "{title}"')
+    assert (result.returncode, result.stdout.strip()) == (0, expected)
+
+
+@pytest.mark.parametrize("title", ["Feat: a", "feat:a", "feature: a", "fix(Scope): a", "", "Rename the fork", "feat: "])
+def test_release_rule_rejects(title):
+    assert run_rule(f'next_version v1.0.0 "{title}"').returncode != 0
+
+
+def test_pr_title_never_inline_in_run():
+    # the title is written by whoever opens the PR: only env values and the API may carry it
+    for path in WORKFLOWS:
+        for job in load(path)["jobs"].values():
+            for step in job.get("steps", []):
+                assert "pull_request.title" not in step.get("run", ""), (path.name, step.get("name"))
+
+
+def test_unit_reads_releases():
+    unit = load(CI)["jobs"]["unit"]
+    assert unit["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
+    assert unit["steps"][1]["name"] == "Release version"  # right after checkout: a bad title fails first

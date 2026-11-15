@@ -37,7 +37,9 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: read # also the release tags
+      pull-requests: read # the PR title, read live
+      actions: read # promote runs on the base commit
     env:
       UV_MALWARE_CHECK: "1" # uv stops before installing a version OSV lists as malware; fails closed
     steps:
@@ -46,6 +48,65 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0 # tests/repo compares with the upstream base commit
+
+      # The release this PR becomes, baked into the image; promote.yml works it out again and checks it.
+      # The token is in this step's env only: the steps below run the PR's code.
+      - name: Release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          pr_number: ${{ github.event.pull_request.number }}
+        run: |
+          # >>> release rule (identical in ci.yml and promote.yml; tests/repo/test_pipeline_files.py checks it)
+          title_pattern='^(feat|fix|deps|docs|ci|test|build|chore|refactor|perf)(\([a-z0-9-]+\))?(!)?: .+'
+          # next_version <previous tag or empty> <PR title>: the release this PR becomes; fails on an unknown title
+          next_version() {
+            local previous=$1 title=$2 type breaking major minor patch
+            [[ "$title" =~ $title_pattern ]] || return 1
+            type=${BASH_REMATCH[1]}
+            breaking=${BASH_REMATCH[3]}
+            if [ -z "$previous" ]; then echo v1.0.0; return 0; fi
+            IFS=. read -r major minor patch <<< "${previous#v}"
+            if [ -n "$breaking" ]; then echo "v$((major + 1)).0.0"
+            elif [ "$type" = feat ]; then echo "v$major.$((minor + 1)).0"
+            else echo "v$major.$minor.$((patch + 1))"; fi
+          }
+          # previous_tag <commit>: the highest vX.Y.Z tag on that commit or one of its ancestors (empty: none yet).
+          # An API error fails (an empty answer would mean "no tags" and restart at v1.0.0); no tags at all is not an error.
+          previous_tag() {
+            local all_tags tag_name tag_sha status
+            all_tags=$(gh api --paginate "repos/$GH_REPO/tags" --jq '.[] | "\(.name) \(.commit.sha)"') || return 1
+            while read -r tag_name tag_sha; do
+              status=$(gh api "repos/$GH_REPO/compare/$tag_sha...$1" --jq .status) || return 1
+              case $status in ahead|identical) echo "$tag_name"; return 0 ;; esac
+            done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' <<< "$all_tags" | sort -rV)
+          }
+          # <<< release rule
+
+          # live, not from the event: a re-run reuses the event, so it would miss a title fixed since
+          pr_title=$(gh api "repos/$GH_REPO/pulls/$pr_number" --jq .title)
+          base_sha=$(git merge-base HEAD refs/remotes/origin/main)
+          # the commit this PR sits on may still be getting its release: number from it once it has one
+          for attempt in $(seq 1 90); do
+            active=$(gh api "repos/$GH_REPO/actions/workflows/promote.yml/runs?head_sha=$base_sha&per_page=20" \
+              --jq '[.workflow_runs[] | select(.status != "completed")] | length')
+            [ "$active" = 0 ] && break
+            if [ "$attempt" = 90 ]; then
+              echo "::error::promote for the base commit $base_sha is still running after 15 minutes"
+              exit 1
+            fi
+            sleep 10
+          done
+          previous=$(previous_tag "$base_sha")
+          if ! version=$(next_version "$previous" "$pr_title"); then
+            echo "::error::the PR title must match $title_pattern (feat: minor, fix:/deps:/docs:/... patch, type! major)"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/release"
+          printf '%s' "$version" > "$RUNNER_TEMP/release/version"
+          printf '%s' "$pr_title" > "$RUNNER_TEMP/release/title"
+          printf '%s' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$version" > "$RUNNER_TEMP/release/url"
+          echo "Release version: $version (previous: ${previous:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -62,12 +123,18 @@ jobs:
           curl_cffi_version=$(lock_version curl-cffi)
           kurigram_version=$(lock_version kurigram)
           : "${yt_dlp_version:?not in uv.lock}" "${curl_cffi_version:?not in uv.lock}" "${kurigram_version:?not in uv.lock}"
+          release_version=$(cat "$RUNNER_TEMP/release/version")
+          release_title=$(cat "$RUNNER_TEMP/release/title")
+          release_url=$(cat "$RUNNER_TEMP/release/url")
           # the same arguments for both targets, so the test image sits on the exact runtime layers
           build_args=(
             --platform linux/amd64
             --build-arg YT_DLP_VERSION="$yt_dlp_version"
             --build-arg CURL_CFFI_VERSION="$curl_cffi_version"
             --build-arg KURIGRAM_VERSION="$kurigram_version"
+            --build-arg APP_VERSION="$release_version"
+            --build-arg APP_RELEASE_TITLE="$release_title"
+            --build-arg APP_RELEASE_URL="$release_url"
           )
           docker build "${build_args[@]}" --target runtime -t yattoko:runtime .
           docker build "${build_args[@]}" --target test -t yattoko:test .

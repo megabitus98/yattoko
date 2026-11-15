@@ -34,6 +34,16 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
     UV_MALWARE_CHECK=1 uv sync --locked --no-dev
 COPY src /app
 
+# The release this image is (ci.yml works it out from the PR title, promote.yml checks it). Set after the
+# dependency layers, which it would otherwise rebuild on every release.
+ARG APP_VERSION=dev
+ARG APP_RELEASE_TITLE=
+ARG APP_RELEASE_URL=
+ENV APP_VERSION=${APP_VERSION} \
+    APP_RELEASE_TITLE=${APP_RELEASE_TITLE} \
+    APP_RELEASE_URL=${APP_RELEASE_URL}
+LABEL org.opencontainers.image.version="${APP_VERSION}"
+
 # The root filesystem is read-only at runtime: yt-dlp and deno caches go under HOME, scratch under /tmp.
 ENV HOME=/tmp/home \
     XDG_CACHE_HOME=/tmp/cache \

@@ -85,6 +85,10 @@ While the bot runs, a heartbeat asks Telegram for the bot's own account every 60
 
 The container runs as a non-root user with a read-only root filesystem. The database and the session file live in the `yattoko-data` volume (`/data`); downloads go to the `yattoko-tmp` volume (`/tmp`). One SQLite file, no Redis or other database service.
 
+## Versions
+
+Every update that reaches `stable` is a release `vX.Y.Z`, numbered from the title of the pull request it came from: `feat:` raises the middle number, a `!` after the type (`feat!:`, `fix!:`) the first, and every other type (`fix:`, `deps:` from Dependabot, `docs:`, `ci:`, `test:`, `build:`, `chore:`, `refactor:`, `perf:`) the last. A title that does not match `^(feat|fix|deps|docs|ci|test|build|chore|refactor|perf)(\([a-z0-9-]+\))?(!)?: .+` fails CI. Each release is a GitHub Release with the pull request's notes, and the image is tagged with its version too. The bot shows its version in `/about`.
+
 ## Development
 
 - `uv sync` installs Python 3.12 dependencies from `uv.lock`.
