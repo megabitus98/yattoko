@@ -63,8 +63,6 @@ spec:
               value: "/tmp/home"
             - name: XDG_CACHE_HOME
               value: "/tmp/cache"
-            - name: DENO_DIR
-              value: "/tmp/cache/deno"
             - name: COOKIES_DIR
               value: "/cookies"
             - name: ENABLE_FFMPEG
