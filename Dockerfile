@@ -1,4 +1,4 @@
-# Modified 2026 by megabitus98 (fork): uv, pinned base, non-root, runtime and test targets, caches and scratch under /tmp, /data owned by app (a new Docker volume copies that owner), uv's malware check on every sync
+# Modified 2026 by megabitus98 (fork): uv, pinned base with Alpine security updates, Node for yt-dlp's JavaScript challenges, non-root, runtime and test targets, caches and scratch under /tmp, /data owned by app (a new Docker volume copies that owner), uv's malware check on every sync
 
 FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
@@ -14,7 +14,10 @@ LABEL org.opencontainers.image.source="https://github.com/megabitus98/yattoko" \
       io.yattoko.curl-cffi="${CURL_CFFI_VERSION}" \
       io.yattoko.kurigram="${KURIGRAM_VERSION}"
 
-RUN apk add --no-cache ffmpeg deno aria2 \
+# The pinned Python image can predate Alpine security fixes. Alpine's Deno package is stale;
+# Node is a supported yt-dlp runtime and receives updates in this Alpine release.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ffmpeg nodejs aria2 \
     && addgroup -g 10001 app \
     && adduser -D -H -u 10001 -G app app \
     && install -d -o app -g app /data
@@ -44,10 +47,9 @@ ENV APP_VERSION=${APP_VERSION} \
     APP_RELEASE_URL=${APP_RELEASE_URL}
 LABEL org.opencontainers.image.version="${APP_VERSION}"
 
-# The root filesystem is read-only at runtime: yt-dlp and deno caches go under HOME, scratch under /tmp.
+# The root filesystem is read-only at runtime: yt-dlp caches go under HOME, scratch under /tmp.
 ENV HOME=/tmp/home \
     XDG_CACHE_HOME=/tmp/cache \
-    DENO_DIR=/tmp/cache/deno \
     TMPFILE_PATH=/tmp/ytdlbot
 
 USER app

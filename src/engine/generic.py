@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # ytdlbot - generic.py
-# Modified 2026 by megabitus98 (fork): no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower, owner notice when the Instagram cookies stopped working, exits tried recorded, PROXY_EXITS tried in order on blocked errors (pinned sites never fall back), single files before audio-only, quality limit on the smaller side (res sort), Instagram single file first, TikTok H.265 first, ENABLE_FFMPEG: short videos take the best picture up to the quality setting and VP9/AV1 is converted to H.264 (transcode.py)
+# Modified 2026 by megabitus98 (fork): Node and Deno for JavaScript challenges, no verbose mode or options log, yt-dlp output through the redacting root logger, build_format_options (H.264 first, PREFERRED_AUDIO_LANG instead of Russian audio), English texts, per-site cookies from COOKIES_DIR as in-memory copies (no BROWSERS), attempt(): extract, refuse playlists and live streams, then download in the same YoutubeDL (no playlist_items), Google Drive source format, audio language matches region tags, settings by user ID, host check before every attempt, socket timeout, oversized files retried a quality lower, owner notice when the Instagram cookies stopped working, exits tried recorded, PROXY_EXITS tried in order on blocked errors (pinned sites never fall back), single files before audio-only, quality limit on the smaller side (res sort), Instagram single file first, TikTok H.265 first, ENABLE_FFMPEG: short videos take the best picture up to the quality setting and VP9/AV1 is converted to H.264 (transcode.py)
 
 import logging
 import os
@@ -137,6 +137,8 @@ def attempt(
     # are tied to the extracting IP), and a fresh in-memory cookies copy for this instance only.
     params = opts | {
         "proxy": ydl_proxy(exit),
+        # The image ships maintained Node packages; keep Deno available for local installs.
+        "js_runtimes": {"deno": {}, "node": {}},
         "noplaylist": True,  # watch?v=x&list=y means the video, not the playlist
         "match_filter": single_video_only,
         "outtmpl": (tmpdir / "%(title).70s.%(ext)s").as_posix(),

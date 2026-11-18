@@ -7,7 +7,7 @@
 - One replica with the `Recreate` strategy. SQLite and the Telegram session file live on the `/data` volume and must never be open in two pods.
 - uid and gid 10001 (the image's `app` user), `fsGroup: 10001` so that user can write the volume, a read-only root filesystem, no capabilities, no service account token.
 - `/data`: a 1Gi claim on block storage. SQLite in WAL mode does not work on NFS or SMB.
-- `/tmp`: an `emptyDir` with `sizeLimit: 10Gi` for downloads and the yt-dlp and deno caches. Plan about 4.5 GB per parallel job; the default `TMP_BUDGET` (`MAX_PARALLEL_JOBS` × 4500 MiB) fits in it. If you change `MAX_PARALLEL_JOBS`, change `sizeLimit`, the `ephemeral-storage` limit and `TMP_BUDGET` with it.
+- `/tmp`: an `emptyDir` with `sizeLimit: 10Gi` for downloads and the yt-dlp cache. Plan about 4.5 GB per parallel job; the default `TMP_BUDGET` (`MAX_PARALLEL_JOBS` × 4500 MiB) fits in it. If you change `MAX_PARALLEL_JOBS`, change `sizeLimit`, the `ephemeral-storage` limit and `TMP_BUDGET` with it.
 - `/cookies`: the optional `yattoko-cookies` Secret, read-only. The bot reads each file into memory and never writes it.
 - Startup and liveness probes run `python /app/health.py`, which fails when the heartbeat file is older than 180 s.
 - Resources: request equals limit. The numbers in the example are placeholders; measure the peak of a large video (download plus ffmpeg merge) and size from that.

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 import yt_dlp
 from pyrogram import enums
+from yt_dlp import YoutubeDL
 
 import main
 from config import BotText
@@ -96,6 +97,15 @@ def test_single_video_downloads_in_same_instance(fake_ydl, tmp_path):
     assert ydl.params["quiet"] is True
     assert ydl.params["proxy"] == ""
     assert ydl.params["outtmpl"].startswith(tmp_path.as_posix() + "/")
+
+
+def test_attempt_enables_node_and_keeps_local_deno(fake_ydl, tmp_path):
+    # yt-dlp enables only Deno by default. The image uses Node, while local installs may use Deno.
+    fake_ydl.results = [VIDEO]
+    attempt("https://www.youtube.com/watch?v=x", "youtube", "direct", {"quiet": True}, tmp_path)
+    [ydl] = fake_ydl.instances
+    with YoutubeDL(ydl.params) as configured:
+        assert set(configured._js_runtimes) == {"node", "deno"}
 
 
 def test_short_link_followed_once(fake_ydl, tmp_path):

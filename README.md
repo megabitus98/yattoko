@@ -95,7 +95,7 @@ Every update that reaches `stable` is a release `vX.Y.Z`, numbered from the titl
 - `uv sync` installs Python 3.12 dependencies from `uv.lock`.
 - `uv run pytest -q` runs the unit tests (no network, no Telegram). `tests/repo` holds checks that need a full git checkout; the image's `test` target leaves them out.
 - `docker build --target test -t yattoko:test . && docker run --rm yattoko:test` runs the unit tests inside the image.
-- To run the bot without Docker, set `DATA_DIR` and `TMPFILE_PATH` to local directories in `.env`, then `cd src && uv run python main.py`. YouTube needs [deno](https://deno.com) on the PATH.
+- To run the bot without Docker, set `DATA_DIR` and `TMPFILE_PATH` to local directories in `.env`, then `cd src && uv run python main.py`. YouTube needs [Node.js](https://nodejs.org) 22 or newer, or [Deno](https://deno.com) 2.3 or newer, on the PATH. The image uses Node.js from Alpine's maintained packages and applies Alpine security updates when built.
 
 ## Changes from upstream
 
