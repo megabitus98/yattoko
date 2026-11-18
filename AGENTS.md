@@ -43,4 +43,4 @@ Yattoko is a Telegram bot for a small allow-listed group: send a link in a priva
 - Unit tests make no network calls and never connect to Telegram.
 - Settings callbacks are matched by anchored regexes built from dicts in `main.py` and saved under the presser's user ID.
 - Not supported on purpose: playlists, channels and live streams. `attempt()` raises `RefusedContent` on a `playlist`, `multi_video` or live result before anything is downloaded, and its `match_filter` stops any playlist entry or live video that gets past that check; the user gets `BotText.refused`. yt-dlp runs with `noplaylist`, so `watch?v=x&list=y` is the video. Instagram carousel posts are playlists and are refused too. yt-dlp uses `source_address: 0.0.0.0` (IPv4 only).
-- The image runs as uid 10001 with a read-only root: `HOME`, `XDG_CACHE_HOME` and `DENO_DIR` point under `/tmp`; `/data` is the only other writable path.
+- The image runs as uid 10001 with a read-only root. `HOME` and `XDG_CACHE_HOME` point under `/tmp`. `/data` is the only other writable path. The image uses Node.js for JavaScript challenges. Local installations can also use Deno.
