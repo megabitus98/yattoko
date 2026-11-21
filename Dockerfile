@@ -1,6 +1,6 @@
 # Modified 2026 by megabitus98 (fork): uv, pinned base with Alpine security updates, Node for yt-dlp's JavaScript challenges, non-root, runtime and test targets, caches and scratch under /tmp, /data owned by app (a new Docker volume copies that owner), uv's malware check on every sync
 
-FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 FROM python:3.12-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 AS runtime
 
